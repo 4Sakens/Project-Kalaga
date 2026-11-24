@@ -40,6 +40,11 @@ The opening's real-time loading phase is paced at 60 fps for its first 60
 seconds by a small fork patch; the title's authored 30 fps resumes for the
 static key art. See [docs/opening.md](docs/opening.md).
 
+The black-uniform/shadow investigation is in
+[docs/graphics.md](docs/graphics.md): the meshes and textures are present, but
+the fork's ray-traced indirect light does not run, so shadowed fabric and faces
+are black. Global gamma cannot fix it without clipping the sunlit yard.
+
 The fork and upstream review is in
 [docs/upstream-review.md](docs/upstream-review.md). The focused PRs it tried
 (AMD view-heap clamp, writelane, relay staging) passed their tests but made the
@@ -93,7 +98,8 @@ See [docs/launcher.md](docs/launcher.md) for every command, config key and exit
 code, [docs/architecture.md](docs/architecture.md) for how the layers fit, and
 [docs/status.md](docs/status.md) for the full measurement log and next steps,
 [docs/performance.md](docs/performance.md) for the frame-rate investigation,
-[docs/opening.md](docs/opening.md) for the 60 fps opening window, and
+[docs/opening.md](docs/opening.md) for the 60 fps opening window,
+[docs/graphics.md](docs/graphics.md) for the black-uniform investigation, and
 [docs/upstream-review.md](docs/upstream-review.md) for the upstream/PR review.
 
 ## Repository layout
@@ -108,6 +114,7 @@ ZZ-box/                       (github.com/4Sakens/Project-Z-GTA)
 │   ├── status.md             measured status, evidence, remaining work
 │   ├── performance.md        FPS measurements, bottlenecks, rejected switches
 │   ├── opening.md            opening pacing, 60 fps window, caveats
+│   ├── graphics.md           black uniforms/shadows, deep-skips and gamma tests
 │   ├── upstream-review.md    forks, PRs/issues, trial integration, licences
 │   └── integration.md        the four-effort merge plan
 ├── fivestar/                 FiveStar Recomp (submodule)

@@ -230,6 +230,18 @@ new image-quality settings. Restoring `vSync=2`, `fsrQuality=0`,
 **3.4–4.0 fps with 0 removals**, and the 60 fps opening still works. World
 entry is settings-sensitive; see [opening.md](opening.md).
 
+### Black uniforms and shadowed surfaces (2026-11-24)
+
+The apparent missing colours are the fork's missing ray-traced indirect light,
+not a mesh or texture-upload bug. The cell's uniform print is present while the
+fabric and faces are black; disabling deep-skips globally did not restore the
+light. A per-program deep-skips switch (fork issue #62, VIcky `e27b969`) was
+ported and its five tests passed, but a native run removed the device, so it is
+not retained. Gamma 25 recovers faces and uniform colours but clips the sunlit
+yard; 15–21 leave the cell black. The stable default gamma 15 is restored. The
+real fix is the fork's BVH/trace lighting path or a deliberate ambient
+post-process. Details and captures: [graphics.md](graphics.md).
+
 ### Upstream sources checked
 
 * [`fxceless/victory-gta6`](https://github.com/fxceless/victory-gta6) at
