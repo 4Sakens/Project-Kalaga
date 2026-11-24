@@ -1,0 +1,6 @@
+[submodule "fivestar"]
+	path = fivestar
+	url = https://github.com/ThatRecompDev/five-star-recomp
+[submodule "xbox2windows"]
+	path = xbox2windows
+	url = https://github.com/R0Y00/Xbox2Windows
