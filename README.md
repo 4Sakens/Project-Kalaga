@@ -11,7 +11,7 @@ The project consolidates four efforts:
 | Effort | Where | What it is |
 |---|---|---|
 | **XCL** | `D:\xcl` (upstream `ivall/xcl`) | General console runtime in Rust: kernelx, XGameRuntime, D3D12.X, XAudio2, VFS, memory, TLS, PE loader, RDNA2 → HLSL → DXIL. Retail titles playable. |
-| **VIctory** | `D:\VIctory` (upstream `Marvisak/VIctory`) | GTA VI–specific layer in Rust: formats, hooks, build identities, shader pipeline, CLI. |
+| **VIctory** | `D:\VIctory` (GTA VI fork `fxceless/victory-gta6` @ `1684989`; base upstream `Marvisak/VIctory`) | GTA VI–specific layer in Rust: formats, hooks, build identities, shader pipeline, CLI. |
 | **FiveStar Recomp** | `fivestar/` (submodule) | GTA VI port in C#/.NET: formats, shader translation, loader, graphics, asset extraction. |
 | **Xbox2Windows** | `xbox2windows/` (submodule) | Static-recompilation research in C++/CMake and Python; source-built CPU/GPU fixtures. |
 | **Project-Z tooling** | `projectz/` (this repo) | Discovery, validation, readiness, build, dependency staging, launch and diagnostics — the glue that turns the four layers into a repeatable pipeline. |
@@ -25,17 +25,21 @@ Verified today on Windows 11 26300, Ryzen 5 5600X, 32 GiB, RX 7600:
 | Game dump validation | ✅ 108/108 manifest files, 22 RPF9 archives, 208.6 GiB, title `7952987A` v1.0.2.1 |
 | Build without Visual Studio | ✅ `victory.exe` (45 MB) via Rust 1.98.1 GNU + mingw-w64, 1m00s |
 | Runtime boot | ✅ title mapped, virtual drive `G:` → dump, offline user, Series X mode |
-| Rendering | ✅ steady **30.0 fps**, 21 draws/frame, 0 dropped pipelines, 11 shaders translated |
-| UI | ✅ first-boot screen confirmed by frame capture: "ACCOUNT PICKER / SCREEN NARRATION / PLAYER" |
+| Rendering | ✅ menus at **29 fps**; prologue at **2.2 fps** (460 ms/frame) |
+| UI | ✅ boot screens, setup wizard, terms, start-screen art and prologue HUD captured |
 | Audio | ✅ APU + DSP connected (256 streams), `audio.rpf` opened via DirectStorage |
-| Input | ✅ GameInput devices enumerated |
-| Menus | ✅ (upstream state) menus run at the title's 30 fps |
-| World | ❌ reached but renders incompletely (0.5–1.8 s frames upstream); can hang the display driver |
-| Gameplay | ❌ not reached |
+| Input | ✅ GameInput devices enumerated; prologue prompts “Move around / Move the camera” |
+| Menus | ✅ account picker → legal → setup → terms → start screen, at 29 fps |
+| Opening cutscene | ✅ plays in order, lit, with its illustrated credit cards |
+| World | ✅ prologue renders characters, yard, watchtower and sky at 2.2 fps; shadowed areas are black |
+| Gameplay | ✅ prologue scene and HUD; movement not actuated |
+| Device stability | ✅ 0 removals in a 15-minute run with the fork and the AMD skip list |
 
-The runtime is not playable yet. What *is* working end to end is the pipeline:
-validate the dump → detect the machine → build the runtime → stage DXC → launch
-the original executable → capture evidence and a diagnostic report.
+The prologue is the deepest verified point. Its shadows are still black and
+its frame rate is 2.2 fps; the rest of the world and story is untested. What
+*is* working end to end is the pipeline: validate the dump → detect the machine
+→ build the runtime → stage DXC → launch the original executable → capture
+evidence and a diagnostic report.
 
 ## Quick start
 
@@ -58,6 +62,14 @@ target = 'x86_64-pc-windows-gnu'
 toolchain = '1.98.1-x86_64-pc-windows-gnu'
 toolchain_bin = 'D:\projectz-deps\mingw64\bin'
 dxc_dir = 'D:\projectz-deps\dxc'
+```
+
+The current GTA VI runtime is the `fxceless/victory-gta6` fork. On AMD cards
+pass the fork's pipeline skips:
+
+```powershell
+$env:VICTORY_SKIP_PIPELINES = (Get-Content docs/amd-skips.txt) -join ','
+$env:VICTORY_SHADER_LOOP_LIMIT = '256'
 ```
 
 See [docs/launcher.md](docs/launcher.md) for every command, config key and exit
