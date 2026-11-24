@@ -1,0 +1,56 @@
+# ZZ-box — combined Xbox-on-Windows runtime + GTA VI port
+
+# Rust / build output
+/target/
+**/target/
+**/bin/
+**/obj/
+
+# .NET
+**/bin/
+**/obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.vssscc
+*.vspscc
+*.vpp/
+
+# C++ / CMake / Python
+/out/
+build/
+cmake-build-*/
+**/*.vcxproj.user
+**/*.sln.docstates
+
+# Logs / dumps / caches
+*.log
+*.bin
+*.rpf
+*.ttpf
+*.xvd
+*.wad
+*.bik
+*.awc
+*.wav
+*.ogg
+*.opus
+*.dxx
+*.dxil
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Game data (never commit)
+**/game/
+**/games/
+**/data/
+**/dumps/
+**/extracted/
+**/assets/
+**/cache/
+**/out/
+**/overlay/
