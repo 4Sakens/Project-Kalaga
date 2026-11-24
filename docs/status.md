@@ -242,6 +242,17 @@ yard; 15–21 leave the cell black. The stable default gamma 15 is restored. The
 real fix is the fork's BVH/trace lighting path or a deliberate ambient
 post-process. Details and captures: [graphics.md](graphics.md).
 
+### BVH builder/trace test (2026-11-24)
+
+On an isolated worktree at `1684989` (stable checkout untouched), enabling
+`VICTORY_BVH_BUILDER=1` let the ray-tracing structure builder run — all 53 of
+its pipelines had host pipelines — but the title then crashed with an access
+violation (`0xC0000005`) before a lit frame. Adding
+`VICTORY_BVH_QUARANTINE=1` avoided the crash and any device removal, but the
+scene stayed effectively unlit with a blue cast and ran at ~5.7 s/frame. The
+builder path does **not** restore usable indirect light and is not enabled in
+the stable configuration. Details: [bvh-test.md](bvh-test.md).
+
 ### Upstream sources checked
 
 * [`fxceless/victory-gta6`](https://github.com/fxceless/victory-gta6) at
