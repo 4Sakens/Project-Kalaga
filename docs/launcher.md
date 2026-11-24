@@ -103,7 +103,9 @@ Every blocker carries its fix, e.g.:
 ```text
 [victory] build=True run=True
     note: VIctory boots the title and runs its menus at the title's own 30 fps; ...
-    warn: victory is not built yet
+    note: On a real GPU the world can hang the display driver; use `projectz launch --warp` ...
+[xcl] build=True run=False
+    warn: xcl is not built yet
              fix: run `projectz build`
 ```
 
