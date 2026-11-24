@@ -1,8 +1,7 @@
-# ZZ-box
 
 **One repository for running Xbox Series X|S game files on Windows — natively, without CPU emulation.**
 
-ZZ-box consolidates the ongoing work on running console (GDK) games — currently **Grand Theft
+Project Z-GTA consolidates the ongoing work on running console (GDK) games — currently **Grand Theft
 Auto VI** — natively on a Windows PC, from a copy of the game the owner already has.
 
 It unifies four efforts:
