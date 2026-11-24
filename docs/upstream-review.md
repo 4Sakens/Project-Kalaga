@@ -144,6 +144,8 @@ silently relicensing the repo.
   black-looking world; rejected.
 - Rolled-back run with stable settings: front end 60 fps, prologue visible at
   3.4–4.0 fps, 0 device removals, `Get-Process victory` responding.
+- Native 1920×1080 stable-settings run: “PROLOGUE” card then the lit prison
+yard, 3.9 fps, 0 device removals.
 - Not run: XCL build/tests, FiveStar .NET tests, Xbox2Windows C++ tests, and
   any game test of #134's shader instructions without the heap clamp.
 

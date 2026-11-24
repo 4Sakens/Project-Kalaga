@@ -46,7 +46,8 @@ The fork and upstream review is in
 world a sub-1 fps texture-upload crawl, so they are not in `main`; the fork is
 back at `1684989` plus the opening patch. Restoring the pre-change graphics
 settings (`vSync=2`, FSR off, AF off) brought the visible prologue back at
-3.4–4.0 fps with no device removal.
+3.4–4.0 fps with no device removal, including a native 1920×1080 check at
+3.9 fps.
 
 The prologue is the deepest verified point. Its shadows are still black and
 its frame rate is 2.2 fps at the default resolution, or 4.0–4.2 fps in the
