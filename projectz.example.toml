@@ -1,0 +1,46 @@
+# Copy to projectz.toml (git-ignored) and adjust the paths.
+# Every path may live outside this repository; nothing here is committed.
+
+[game]
+# The dump to run. Leave empty to search `root` with `projectz locate`.
+dir = 'D:\GTA 6\GTA6.Xbox.v1.0.2.1-CYBERLEEK'
+root = 'D:\GTA 6'
+
+# Refuse to run a dump that does not match the supported build.
+expected_title_id = '7952987A'
+expected_version = '1.0.2.1'
+
+# Optional .torrent used as a file/size manifest. Empty = look next to the dump.
+manifest = ''
+
+# Warn when the drive holding the game has less free space than this.
+min_free_gib = 8.0
+
+[runtime]
+# "victory" (GTA VI-specific layer) or "xcl" (general console runtime).
+preferred = 'victory'
+victory_dir = 'D:\VIctory'
+xcl_dir = 'D:\xcl'
+fivestar_dir = 'fivestar'
+
+# Build without Visual Studio: Rust GNU toolchain + mingw-w64 bin folder.
+# target = 'x86_64-pc-windows-gnu'
+# toolchain = '1.98.1-x86_64-pc-windows-gnu'
+# toolchain_bin = 'D:\projectz-deps\mingw64\bin'
+
+# 'release' or 'diag' (diagnostics aids; needed for VICTORY_CAPTURE).
+profile = 'release'
+
+# dxcompiler.dll + dxil.dll; launch stages them next to the runtime.
+dxc_dir = 'D:\projectz-deps\dxc'
+
+[launch]
+console = 'series-x'      # series-x | series-s
+warp = false              # true = D3D12 software adapter (diagnostics only)
+log = 'info'              # VICTORY_LOG value
+timeout = 0               # seconds; 0 waits for the title to exit
+extra_args = []
+
+[launch.extra_env]
+# VICTORY_GPU_TIMING = '1'
+# VICTORY_D3D12_DRED = '1'

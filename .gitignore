@@ -44,6 +44,11 @@ cmake-build-*/
 Thumbs.db
 desktop.ini
 
+# Project-Z local state (machine-specific paths, logs, reports)
+/projectz.toml
+/logs/
+/reports/
+
 # Game data (never commit)
 **/game/
 **/games/
@@ -54,3 +59,7 @@ desktop.ini
 **/cache/
 **/out/
 **/overlay/
+
+# Python bytecode
+__pycache__/
+*.pyc
