@@ -109,8 +109,9 @@ code, [docs/architecture.md](docs/architecture.md) for how the layers fit, and
 [docs/graphics.md](docs/graphics.md) for the black-uniform investigation,
 [docs/bvh-test.md](docs/bvh-test.md) for the BVH builder/trace test,
 [docs/shadow-mask-test.md](docs/shadow-mask-test.md) for the five-program
-shadow-mask test, and [docs/upstream-review.md](docs/upstream-review.md) for
-the upstream/PR review.
+light-path test, [docs/light-passes.md](docs/light-passes.md) for the pass map
+and repository updates, and [docs/upstream-review.md](docs/upstream-review.md)
+for the upstream/PR review.
 
 ## Repository layout
 
@@ -126,7 +127,8 @@ ZZ-box/                       (github.com/4Sakens/Project-Z-GTA)
 │   ├── opening.md            opening pacing, 60 fps window, caveats
 │   ├── graphics.md           black uniforms/shadows, deep-skips and gamma tests
 │   ├── bvh-test.md           isolated BVH builder/trace test, stable untouched
-│   ├── shadow-mask-test.md   five trace programs implemented; partial cell light
+│   ├── shadow-mask-test.md   five light-path programs; exact-mask + cell result
+│   ├── light-passes.md       light-pass map and 2026-11-24 repository check
 │   ├── upstream-review.md    forks, PRs/issues, trial integration, licences
 │   └── integration.md        the four-effort merge plan
 ├── fivestar/                 FiveStar Recomp (submodule)

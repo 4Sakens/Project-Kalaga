@@ -257,29 +257,41 @@ scene stayed effectively unlit with a blue cast and ran at ~5.7 s/frame. The
 builder path does **not** restore usable indirect light and is not enabled in
 the stable configuration. Details: [bvh-test.md](bvh-test.md).
 
-### Shadow-mask trace test (2026-11-24)
+### Light-path / shadow-mask test (2026-11-24)
 
-In the isolated `D:\VIctory-shadow` worktree (branch `shadow-mask-trace`,
-commit `f9bc747`), the five remaining shadow-mask compute programs now
-translate. With the normal AMD skip list and two opt-in switches
-(`VICTORY_WAVE_MASK_ELSEWHERE=1`, `VICTORY_WAVE_HALF_SUM_ANY=1`), the prologue
-and cell render partial light with **0 device removals** at 3.7–4.0 fps. The
-cell's bunk, bars and bedding are visible; faces and unlit fabric remain dark
-because the indirect bounce is still missing. The builder was off. Details:
-[shadow-mask-test.md](shadow-mask-test.md).
+In the isolated `D:\VIctory-shadow` worktree, the five remaining programs
+previously grouped as shadow-mask traces now translate. Their `.cdxil` names
+are `CS_RaytracingResolve_a56bfb9c`, `CS_IrradianceCache_Shade`,
+`CS_IrradianceCache_ShadeSecondary`, a transpose utility, and water optical
+depth — not five shadow traces.
+
+Upstream `gta6/main` `90228a7` (fetched as `2119b0e`) restores the parked
+lane-mask pairs exactly and translates the resolve and both irradiance-cache
+shaders. With that cherry-pick, `VICTORY_WAVE_MASK_ELSEWHERE=0` and only
+`VICTORY_WAVE_HALF_SUM_ANY=1` for the tiny transpose program, all five
+translate: prologue hair/yard/prisoners are lit, gameplay is 3.6 fps, and the
+run has **0 device removals**. Exact masks alone leave the face black because
+the transpose program still fails; the mask approximation is no longer needed.
+The cell was not re-captured with this exact-mask combination; the earlier
+both-switches run remains the cell evidence (bunk, bars and bedding visible,
+faces and unlit fabric dark). The builder was off. Details:
+[shadow-mask-test.md](shadow-mask-test.md) and
+[light-passes.md](light-passes.md).
 
 ### Upstream sources checked
 
 * [`fxceless/victory-gta6`](https://github.com/fxceless/victory-gta6) at
-  `1684989` — the fork runtime above. Its README reports 30 fps menus, a lit
-  opening cutscene, a 2–4 fps prologue and black shadows; this run matches
-  that on the RX 7600.
-* [`xcl-dev/xcl`](https://github.com/xcl-dev/xcl) at `1d027e5` — inspected but
-  **not built**: it requires MSVC and the Windows SDK, neither installed here,
-  and the local checkout is 233 commits behind. Its roadmap issue #1833 still
-  tracks a retail title past world load; the fork credits XCL as a reference.
-  The recent per-lane DXIL, sparse-readback and f16-rounding PRs are not part of
-  the GTA VI path here.
+  `gta6/main` `2119b0e` — the stable checkout is still `1684989`. Its five new
+  commits include the exact parked-lane-mask fix (`90228a7`), a temporary
+  removal (`9e49b8a`) and its restoration (`2119b0e`); the fork README still
+  reports 30 fps menus, a lit opening cutscene, a 2–4 fps prologue and black
+  shadows. Details and the local test: [light-passes.md](light-passes.md).
+* [`xcl-dev/xcl`](https://github.com/xcl-dev/xcl) at `origin/main` `20cf130` —
+  fetched but **not built**: it requires MSVC and the Windows SDK, neither
+  installed here, and the local checkout is 248 commits behind. Its roadmap
+  issue #1833 still tracks a retail title past world load; the fork credits XCL
+  as a reference. Recent per-lane mask, AMD MSAA and direct-DXIL changes are
+  reference material, not part of the GTA VI path here.
 
 ## What is implemented, what is verified
 
