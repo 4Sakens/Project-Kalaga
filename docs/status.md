@@ -285,17 +285,18 @@ the stable configuration. Details: [bvh-test.md](bvh-test.md).
 | Menus beyond first boot | fork | yes — account picker, legal notices, setup wizard, terms, loading art, start-screen art, opening cutscene |
 | Opening pacing | fork + patch | yes — 60 fps for the first 60 s of loading, then the title's 30 fps; zero present warnings |
 | Start-screen menu buttons | fork | not captured — the profile picker advanced into the cutscene |
-| World / gameplay | fork, incomplete | yes — prologue renders with HUD at 2.2 fps default, 4.0–4.2 fps best at 640×360; movement not actuated |
+| World / gameplay | fork, incomplete | yes — prologue renders with HUD at 4.0–4.1 fps native with the quality profile, 4.0–4.2 fps at 640×360; movement not actuated |
+| Material/texture quality | fork | yes — AF 16, near-material LOD 1.0, native 1920×1080; 0 device removals |
 | Ray-traced shadows / bounce light | fork | no — shadowed surfaces are black |
 
 ## Remaining barriers
 
 1. **Black shadows** (fork): the game's ray-traced bounce light and shadows do
    not run yet, so anything the sun does not hit directly is black.
-2. **World frame rate** (fork): 2.2 fps at the default resolution, 4.0–4.2 fps
-   in the low-resolution performance configuration. The measured wall is
-   71–74 MB/frame of title-buffer readback plus ~95 ms of single-record
-   indirect mesh draws; see [performance.md](performance.md).
+2. **World frame rate** (fork): 4.0–4.1 fps native with the sharper quality
+   profile, 4.0–4.2 fps in the low-resolution performance configuration. The
+   measured wall is 71–74 MB/frame of title-buffer readback plus ~95 ms of
+   single-record indirect mesh draws; see [performance.md](performance.md).
 3. **Input and gameplay depth**: the prologue HUD prompts were seen, but
    movement, the pause menu and save/load in gameplay were not actuated.
 4. **World beyond the prologue** was not reached in this run.
