@@ -257,6 +257,17 @@ scene stayed effectively unlit with a blue cast and ran at ~5.7 s/frame. The
 builder path does **not** restore usable indirect light and is not enabled in
 the stable configuration. Details: [bvh-test.md](bvh-test.md).
 
+### Shadow-mask trace test (2026-11-24)
+
+In the isolated `D:\VIctory-shadow` worktree (branch `shadow-mask-trace`,
+commit `f9bc747`), the five remaining shadow-mask compute programs now
+translate. With the normal AMD skip list and two opt-in switches
+(`VICTORY_WAVE_MASK_ELSEWHERE=1`, `VICTORY_WAVE_HALF_SUM_ANY=1`), the prologue
+and cell render partial light with **0 device removals** at 3.7–4.0 fps. The
+cell's bunk, bars and bedding are visible; faces and unlit fabric remain dark
+because the indirect bounce is still missing. The builder was off. Details:
+[shadow-mask-test.md](shadow-mask-test.md).
+
 ### Upstream sources checked
 
 * [`fxceless/victory-gta6`](https://github.com/fxceless/victory-gta6) at

@@ -107,8 +107,10 @@ code, [docs/architecture.md](docs/architecture.md) for how the layers fit, and
 [docs/performance.md](docs/performance.md) for the frame-rate investigation,
 [docs/opening.md](docs/opening.md) for the 60 fps opening window,
 [docs/graphics.md](docs/graphics.md) for the black-uniform investigation,
-[docs/bvh-test.md](docs/bvh-test.md) for the BVH builder/trace test, and
-[docs/upstream-review.md](docs/upstream-review.md) for the upstream/PR review.
+[docs/bvh-test.md](docs/bvh-test.md) for the BVH builder/trace test,
+[docs/shadow-mask-test.md](docs/shadow-mask-test.md) for the five-program
+shadow-mask test, and [docs/upstream-review.md](docs/upstream-review.md) for
+the upstream/PR review.
 
 ## Repository layout
 
@@ -124,6 +126,7 @@ ZZ-box/                       (github.com/4Sakens/Project-Z-GTA)
 │   ├── opening.md            opening pacing, 60 fps window, caveats
 │   ├── graphics.md           black uniforms/shadows, deep-skips and gamma tests
 │   ├── bvh-test.md           isolated BVH builder/trace test, stable untouched
+│   ├── shadow-mask-test.md   five trace programs implemented; partial cell light
 │   ├── upstream-review.md    forks, PRs/issues, trial integration, licences
 │   └── integration.md        the four-effort merge plan
 ├── fivestar/                 FiveStar Recomp (submodule)
