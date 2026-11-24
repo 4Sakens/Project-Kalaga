@@ -210,17 +210,38 @@ ms**, and after the cutoff the key art returns to **30 fps / 33.3 ms** with
 produced those warnings and is not used. Details and caveats are in
 [opening.md](opening.md).
 
+### Upstream review (2026-11-24)
+
+Every local Git checkout and the three named remotes were fetched and reviewed.
+Fork commits `4e17478`/`90228a7`/`3930989` and the focused open PRs #134 (AMD
+view-heap clamp + two shader instructions), #139 (writelane outside EXEC) and
+#141 (relay staging wait) were applied on a trial branch. The tests passed (213
+passed, 2 ignored) and the build succeeded, but the world became a 0.2–0.5 fps,
+multi-GB texture upload with a black-looking picture, so the experiment was
+rolled back. Upstream VIctory `70564ae` was not merged: a trial merge conflicts
+in 36 files / 274 hunks (fork issue #126). XCL is 233 commits ahead but has no
+MSVC/Windows-SDK build here; FiveStar and Xbox2Windows are separate
+implementations; the `mkw-web` checkouts are unrelated. No upstream source was
+copied. Full table and licences: [upstream-review.md](upstream-review.md).
+
+A separate baseline run then removed the AMD device at world entry under the
+new image-quality settings. Restoring `vSync=2`, `fsrQuality=0`,
+`anisotropicFiltering=0` (the pre-change set) produced a visible prologue at
+**3.4–4.0 fps with 0 removals**, and the 60 fps opening still works. World
+entry is settings-sensitive; see [opening.md](opening.md).
+
 ### Upstream sources checked
 
 * [`fxceless/victory-gta6`](https://github.com/fxceless/victory-gta6) at
   `1684989` — the fork runtime above. Its README reports 30 fps menus, a lit
   opening cutscene, a 2–4 fps prologue and black shadows; this run matches
   that on the RX 7600.
-* [`xcl-dev/xcl`](https://github.com/xcl-dev/xcl) at `4178e88` — inspected but
-  **not built**: it requires MSVC and the Windows SDK, neither installed here.
-  Its README and issues report the same title reaching 30 fps menus and, on
-  other GPUs, the world, which corroborates the fork's target; the fork
-  credits XCL as a reference.
+* [`xcl-dev/xcl`](https://github.com/xcl-dev/xcl) at `1d027e5` — inspected but
+  **not built**: it requires MSVC and the Windows SDK, neither installed here,
+  and the local checkout is 233 commits behind. Its roadmap issue #1833 still
+  tracks a retail title past world load; the fork credits XCL as a reference.
+  The recent per-lane DXIL, sparse-readback and f16-rounding PRs are not part of
+  the GTA VI path here.
 
 ## What is implemented, what is verified
 
@@ -232,7 +253,7 @@ produced those warnings and is not used. Details and caveats are in
 | Runtime planning with fixes | yes | yes |
 | Runtime build (release + diag) | yes | yes, 3 successful builds (release, diag, fork diag) |
 | DXC staging | yes | yes, DLLs copied next to the exe |
-| Launch + logging + exit diagnosis | yes | yes, 19 runs (release + diag, WARP + hardware + fork) |
+| Launch + logging + exit diagnosis | yes | yes, 22 runs (release + diag, WARP + hardware + fork) |
 | Title boot / rendering / audio / input | upstream | yes, evidence above |
 | Menus beyond first boot | fork | yes — account picker, legal notices, setup wizard, terms, loading art, start-screen art, opening cutscene |
 | Opening pacing | fork + patch | yes — 60 fps for the first 60 s of loading, then the title's 30 fps; zero present warnings |

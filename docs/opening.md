@@ -53,6 +53,17 @@ image, so its 30 fps cadence does not matter. The run had no device removal.
 The 60 fps phase adds no loading step: it only changes how the existing real
 time frames are paced.
 
+### Settings that keep the world stable
+
+The 60 fps window was verified with the stable graphics set: `vSync=2`,
+`fsrQuality=0`, `anisotropicFiltering=0`, with the low world settings from
+[performance.md](performance.md). Raising FSR/AF and switching to `vSync=1`
+coincided with the AMD device being removed at world entry (the window
+vanished); restoring the stable set brought the prologue back at 3.4–4.0 fps
+with no removal. Do not treat the image-quality increases as free — test the
+world after changing them. The full review is in
+[upstream-review.md](upstream-review.md).
+
 ## Limits
 
 - This smooths the **real-time** spinner/logo/loading frames. It does not add

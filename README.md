@@ -34,11 +34,19 @@ Verified today on Windows 11 26300, Ryzen 5 5600X, 32 GiB, RX 7600:
 | Opening cutscene | ✅ plays in order, lit, with its illustrated credit cards |
 | World | ✅ prologue renders characters, yard, watchtower and sky at 2.2–4.2 fps; shadowed areas are black |
 | Gameplay | ✅ prologue scene and HUD; movement not actuated |
-| Device stability | ✅ 0 removals in a 15-minute run with the fork and the AMD skip list |
+| Device stability | ✅ 0 removals in the stable 15-minute run; world entry is settings-sensitive (see the review) |
 
 The opening's real-time loading phase is paced at 60 fps for its first 60
 seconds by a small fork patch; the title's authored 30 fps resumes for the
 static key art. See [docs/opening.md](docs/opening.md).
+
+The fork and upstream review is in
+[docs/upstream-review.md](docs/upstream-review.md). The focused PRs it tried
+(AMD view-heap clamp, writelane, relay staging) passed their tests but made the
+world a sub-1 fps texture-upload crawl, so they are not in `main`; the fork is
+back at `1684989` plus the opening patch. Restoring the pre-change graphics
+settings (`vSync=2`, FSR off, AF off) brought the visible prologue back at
+3.4–4.0 fps with no device removal.
 
 The prologue is the deepest verified point. Its shadows are still black and
 its frame rate is 2.2 fps at the default resolution, or 4.0–4.2 fps in the
@@ -83,8 +91,9 @@ $env:VICTORY_SHADER_LOOP_LIMIT = '256'
 See [docs/launcher.md](docs/launcher.md) for every command, config key and exit
 code, [docs/architecture.md](docs/architecture.md) for how the layers fit, and
 [docs/status.md](docs/status.md) for the full measurement log and next steps,
-and [docs/performance.md](docs/performance.md) for the frame-rate investigation,
-and [docs/opening.md](docs/opening.md) for the 60 fps opening window.
+[docs/performance.md](docs/performance.md) for the frame-rate investigation,
+[docs/opening.md](docs/opening.md) for the 60 fps opening window, and
+[docs/upstream-review.md](docs/upstream-review.md) for the upstream/PR review.
 
 ## Repository layout
 
@@ -98,6 +107,7 @@ ZZ-box/                       (github.com/4Sakens/Project-Z-GTA)
 │   ├── status.md             measured status, evidence, remaining work
 │   ├── performance.md        FPS measurements, bottlenecks, rejected switches
 │   ├── opening.md            opening pacing, 60 fps window, caveats
+│   ├── upstream-review.md    forks, PRs/issues, trial integration, licences
 │   └── integration.md        the four-effort merge plan
 ├── fivestar/                 FiveStar Recomp (submodule)
 ├── xbox2windows/             Xbox2Windows (submodule)
