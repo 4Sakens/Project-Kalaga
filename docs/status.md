@@ -145,29 +145,48 @@ The brightness choice was written by the title to
 `desiredFPS=30`, `fsrQuality=2` — and a player save folder was created, so
 these are the game's own settings/profile code paths, not a UI mock.
 
-### Where the front end stops
+### Fork runtime: opening cutscene and prologue
 
-The start-screen key art renders, then the host device is removed while the
-menu scene compiles and draws. Measured on both adapters:
+`fxceless/victory-gta6` is a GTA VI-specific fork of VIctory. Its `main` at
+`1684989` is seven commits ahead of the `ffe310e` this checkout had, so
+`D:\VIctory` was fast-forwarded to it and rebuilt as a diag binary with the
+same GNU toolchain.
 
-* **WARP:** three runs removed the device with DXGI 0x887A0004 / 0x887A0005,
-  once at a 1-list submission with no breadcrumbs and once at a 28-list
-  submission (DRED breadcrumbs: 2048² and 4096² compute passes, 32³ volume
-  upload). Skipping the five heaviest compute pipelines removed all dispatches
-  (`dispatched=0`) but the device was still removed during front-end resource
-  work, so this is not only post-processing cost.
-* **RX 7600:** the cached run translated 1,826 shaders, then removed the device
-  after an 11-list submission with 0x887A0006. At that point it was at
-  0.6 fps / 1,600 ms per frame, 1,448 draws/frame with 1,561 draws dropped for
-  missing host pipelines. The desktop stayed responsive; the title's D3D12
-  device was removed and the process exited.
-* The log names mesh `093c64546c55554e` (11 draws/frame) and compute shaders
-  that fail translation with "a structured buffer of unknown stride",
-  "image_gather4_l", "a lane mask holding lanes elsewhere read as data", and
-  "a descriptor neither loaded nor built".
+The fork's AMD report (issue #3, RX 9060 XT / RX 9070 XT) supplies a
+43-program skip list: 41 `CS_RaytracingResolve` variants that crash AMD's
+shader compiler, plus `eeed82b877b44b5f` and `fc5e66f8f873d3bb` (meshlet
+culling). The last is the program this machine saw fail translation earlier.
+The exact list is in [`amd-skips.txt`](amd-skips.txt); pass it as
+`VICTORY_SKIP_PIPELINES=$(paste -sd, docs/amd-skips.txt)`.
+With that list, `VICTORY_SHADER_LOOP_LIMIT=256` and DRED on, a 15-minute
+hardware run measured:
 
-The menu buttons/options were therefore never presented, and no world/gameplay
-frame was reached.
+| Stage | Measured |
+|---|---|
+| Front end / start screen | 29 fps, 11 draws/frame while 735 pipelines were made |
+| Opening cutscene | 0.6–1.6 fps, 588–2,783 draws/frame, 700–759 dropped |
+| Prologue gameplay | 2.2 fps, 460 ms/frame (210 ms GPU, 156 ms preparing, 85 ms copy-back) |
+| Device removals | **0** in 15 minutes |
+| Saves | autosave written during the run |
+
+The cutscene plays in order with its illustrated credit cards, and the
+prologue renders a lit prison yard: characters, watchtower, sky, and the
+game's own HUD prompts (“Move around” / “Move the camera”). Shadowed surfaces
+are black, as the fork documents: its ray-traced bounce light and shadows are
+not implemented yet. The movement prompt was observed but movement was not
+actuated.
+
+### Upstream sources checked
+
+* [`fxceless/victory-gta6`](https://github.com/fxceless/victory-gta6) at
+  `1684989` — the fork runtime above. Its README reports 30 fps menus, a lit
+  opening cutscene, a 2–4 fps prologue and black shadows; this run matches
+  that on the RX 7600.
+* [`xcl-dev/xcl`](https://github.com/xcl-dev/xcl) at `4178e88` — inspected but
+  **not built**: it requires MSVC and the Windows SDK, neither installed here.
+  Its README and issues report the same title reaching 30 fps menus and, on
+  other GPUs, the world, which corroborates the fork's target; the fork
+  credits XCL as a reference.
 
 ## What is implemented, what is verified
 
@@ -177,40 +196,37 @@ frame was reached.
 | Archive/manifest validation | yes | yes |
 | Hardware/toolchain doctor | yes | yes |
 | Runtime planning with fixes | yes | yes |
-| Runtime build (release + diag) | yes | yes, 2 successful builds |
+| Runtime build (release + diag) | yes | yes, 3 successful builds (release, diag, fork diag) |
 | DXC staging | yes | yes, DLLs copied next to the exe |
-| Launch + logging + exit diagnosis | yes | yes, 10 runs (release + diag, WARP + hardware) |
+| Launch + logging + exit diagnosis | yes | yes, 11 runs (release + diag, WARP + hardware + fork) |
 | Title boot / rendering / audio / input | upstream | yes, evidence above |
-| Menus beyond first boot | upstream | yes — account picker, legal notices, setup wizard, terms, loading art, start-screen art |
-| Start-screen menu buttons | upstream | no — host device removed while the menu scene draws |
-| World / gameplay | upstream, incomplete | no — not reached |
+| Menus beyond first boot | fork | yes — account picker, legal notices, setup wizard, terms, loading art, start-screen art, opening cutscene |
+| Start-screen menu buttons | fork | not captured — the profile picker advanced into the cutscene |
+| World / gameplay | fork, incomplete | yes — prologue renders with HUD at 2.2 fps; movement not actuated |
+| Ray-traced shadows / bounce light | fork | no — shadowed surfaces are black |
 
 ## Remaining barriers
 
-1. **Front-end scene** (upstream): after 1,826 translated shaders the host
-   device is removed while the start-screen menu draws, on WARP and on the
-   RX 7600. Measured 1,600 ms/frame and 1,561 dropped draws at that point.
-2. **Shader translation gaps** (upstream): compute shaders using unknown-stride
-   structured buffers, `image_gather4_l`, cross-lane masks, or descriptors
-   neither loaded nor built are dropped; mesh `093c64546c55554e` has no host
-   pipeline.
-3. **World rendering** remains untested behind the front-end failure; the
-   earlier upstream warning about world entry and display-driver hangs still
-   stands.
-4. **No Visual Studio** on this machine: fine for the GNU target, but upstream
-   CI and D3D12 debugging aids assume MSVC.
+1. **Black shadows** (fork): the game's ray-traced bounce light and shadows do
+   not run yet, so anything the sun does not hit directly is black.
+2. **World frame rate** (fork): 2.2 fps in the prologue, 460 ms/frame, with the
+   card about 45% busy; compute and per-frame preparation dominate.
+3. **Input and gameplay depth**: the prologue HUD prompts were seen, but
+   movement, the pause menu and save/load in gameplay were not actuated.
+4. **World beyond the prologue** was not reached in this run.
+5. **No Visual Studio** on this machine: fine for the GNU target, but XCL and
+   some D3D12 debugging aids assume MSVC.
 
 ## Next steps
 
-1. Reproduce the hardware 11-list submission with `VICTORY_D3D12_DEBUG=1` and
-   `VICTORY_GPU_TIMING=1`; identify the invalid command, then add the missing
-   converter op or skip only that pipeline.
-2. Close the four converter gaps above so the start-screen menu can present,
-   then capture its buttons/options.
-3. Only then measure world frames with `VICTORY_SHADER_LOOP_LIMIT` and
-   `VICTORY_SKIP_PIPELINES` — this is the upstream bottleneck, not a launcher
-   issue.
-4. Build XCL through the same tooling (`projectz build --runtime xcl`) and
-   compare GTA VI bring-up progress between the two runtimes.
+1. Verify movement and the pause menu in the prologue (WASD / pad), then
+   capture a moved frame and the menu.
+2. Measure `VICTORY_RELAY=2` and
+   `VICTORY_LATE_WAIT=3 VICTORY_WIDE_BACK=1 VICTORY_CARD_BUFFERS_MIN_MB=1`
+   against the 2.2 fps baseline; the fork documents both as faster.
+3. Implement the fork's missing ray-traced bounce light and shadows (see
+   `docs/fork-ray-tracing.md`) so shadowed areas stop rendering black.
+4. Build XCL when MSVC and the Windows SDK are available, or add a documented
+   GNU build path, and compare it with the fork on the same save.
 5. Add a packaged, one-command setup for the toolchain (Rust + mingw + DXC) so a
    clean machine needs no manual steps.
