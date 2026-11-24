@@ -116,6 +116,28 @@ $env:VICTORY_CARD_REHASH_RUNS = '1'
 python -m projectz launch --config logs/release-config.toml --timeout 900
 ```
 
+### Quality profile at native resolution (2026-11-24)
+
+The image was sharper at essentially the same frame rate, because the frame is
+not fill-rate bound. This profile was tested at **1920×1080**:
+
+```text
+anisotropicFiltering 16
+texLodScale_Mat_High 1.0
+texLodScale_Mat_Med 1.0
+lodScale 0.8
+fsrQuality 0
+gamma 15
+vSync 2
+```
+
+with the same launch settings as above plus `VICTORY_INPLACE_MB=4096`. It ran
+at **4.0–4.1 fps (244–252 ms/frame, 4,885 draws/frame)** with **0 device
+removals**, versus 3.9 fps for the lower-quality native run. Hair, faces and
+the uniform's printed panel are visibly sharper. The shadows and shadowed
+clothing are still black; that is the missing ray-traced light in
+[graphics.md](graphics.md), not texture filtering.
+
 The run used the optimized diagnostics build (release profile with the
 `diagnostics` feature); a plain release build may be marginally faster but
 was not remeasured at 640×360. Logs: `logs/perf5-console.log`,

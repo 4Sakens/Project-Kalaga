@@ -92,6 +92,17 @@ blowing out the sunlit yard.
 - `logs/shadow-not-2.png` — native run of the per-program switch: desktop after
   the device removal.
 
-The stable graphics settings remain `vSync=2`, `fsrQuality=0`,
-`anisotropicFiltering=0`, `gamma=15`; backups are
-`logs/settings-before-60.xml` and `logs/settings-before-gamma.xml`.
+## Quality profile that did help
+
+A separate texture-quality change was successful and is now active:
+`anisotropicFiltering=16`, `texLodScale_Mat_High=1.0`,
+`texLodScale_Mat_Med=1.0`, `lodScale=0.8`, `gamma=15`, `vSync=2`, FSR off, and
+`VICTORY_INPLACE_MB=4096` at native 1920×1080. It measured **4.0–4.1 fps** with
+0 device removals (the low-quality native baseline was 3.9 fps). Hair, faces
+and the uniform's printed panel are visibly sharper.
+
+It does not fill the missing light; shadowed fabric and faces remain black.
+The stable graphics settings are therefore `vSync=2`, `fsrQuality=0`,
+`anisotropicFiltering=16`, `gamma=15`; backups are
+`logs/settings-before-60.xml`, `logs/settings-quality-base.xml` and
+`logs/settings-before-gamma.xml`.

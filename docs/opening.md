@@ -55,14 +55,13 @@ time frames are paced.
 
 ### Settings that keep the world stable
 
-The 60 fps window was verified with the stable graphics set: `vSync=2`,
-`fsrQuality=0`, `anisotropicFiltering=0`, with the low world settings from
-[performance.md](performance.md). Raising FSR/AF and switching to `vSync=1`
-coincided with the AMD device being removed at world entry (the window
-vanished); restoring the stable set brought the prologue back at 3.4–4.0 fps
-with no removal. Do not treat the image-quality increases as free — test the
-world after changing them. The full review is in
-[upstream-review.md](upstream-review.md).
+The 60 fps window was verified with `vSync=2`, `fsrQuality=0`. A later quality
+profile — `anisotropicFiltering=16`, near-material LOD `1.0`, `lodScale=0.8`,
+`VICTORY_INPLACE_MB=4096` — also held at native 1920×1080: **4.0–4.1 fps with
+0 device removals**, and visibly sharper materials. The combination that
+removed the device was FSR quality 2 with `vSync=1`; keep FSR off and test the
+world after changing the display settings. Details are in
+[performance.md](performance.md) and [graphics.md](graphics.md).
 
 ## Limits
 

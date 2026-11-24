@@ -169,7 +169,9 @@ hardware run measured:
 | Device removals | **0** in 15 minutes |
 | Saves | autosave written during the run |
 
-A later performance run at 640×360 reached 4.0–4.2 fps; see the frame-rate
+A later performance run at 640×360 reached 4.0–4.2 fps, and a native
+quality-profile run (AF 16, near-material LOD 1.0, `lodScale=0.8`,
+`VICTORY_INPLACE_MB=4096`) held 4.0–4.1 fps at 1920×1080; see the frame-rate
 investigation below.
 
 The cutscene plays in order with its illustrated credit cards, and the
@@ -224,11 +226,13 @@ MSVC/Windows-SDK build here; FiveStar and Xbox2Windows are separate
 implementations; the `mkw-web` checkouts are unrelated. No upstream source was
 copied. Full table and licences: [upstream-review.md](upstream-review.md).
 
-A separate baseline run then removed the AMD device at world entry under the
-new image-quality settings. Restoring `vSync=2`, `fsrQuality=0`,
-`anisotropicFiltering=0` (the pre-change set) produced a visible prologue at
-**3.4–4.0 fps with 0 removals**, and the 60 fps opening still works. World
-entry is settings-sensitive; see [opening.md](opening.md).
+A separate baseline run then removed the AMD device at world entry when FSR
+quality 2 and `vSync=1` were enabled together. Restoring `vSync=2` and
+`fsrQuality=0` produced a visible prologue at **3.4–4.0 fps with 0 removals**.
+A later profile with `anisotropicFiltering=16`, near-material LOD 1.0,
+`lodScale=0.8` and `VICTORY_INPLACE_MB=4096` held **4.0–4.1 fps at native
+1920×1080 with 0 removals**, and is sharper. World entry is settings-sensitive;
+see [opening.md](opening.md).
 
 ### Black uniforms and shadowed surfaces (2026-11-24)
 

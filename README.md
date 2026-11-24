@@ -25,7 +25,8 @@ Verified today on Windows 11 26300, Ryzen 5 5600X, 32 GiB, RX 7600:
 | Game dump validation | ✅ 108/108 manifest files, 22 RPF9 archives, 208.6 GiB, title `7952987A` v1.0.2.1 |
 | Build without Visual Studio | ✅ `victory.exe` (45 MB) via Rust 1.98.1 GNU + mingw-w64, 1m00s |
 | Runtime boot | ✅ title mapped, virtual drive `G:` → dump, offline user, Series X mode |
-| Rendering | ✅ menus at **29 fps**; prologue at **2.2 fps** default, **4.0–4.2 fps** best at 640×360 |
+| Rendering | ✅ menus at **29 fps**; prologue at **4.0–4.1 fps** native with the quality profile, **4.0–4.2 fps** best at 640×360 |
+| Texture quality | ✅ **AF 16**, near-material LOD restored, native 1920×1080; sharper at the same ~4 fps |
 | UI | ✅ boot screens, setup wizard, terms, start-screen art and prologue HUD captured |
 | Audio | ✅ APU + DSP connected (256 streams), `audio.rpf` opened via DirectStorage |
 | Input | ✅ GameInput devices enumerated; prologue prompts “Move around / Move the camera” |
@@ -53,14 +54,16 @@ The fork and upstream review is in
 [docs/upstream-review.md](docs/upstream-review.md). The focused PRs it tried
 (AMD view-heap clamp, writelane, relay staging) passed their tests but made the
 world a sub-1 fps texture-upload crawl, so they are not in `main`; the fork is
-back at `1684989` plus the opening patch. Restoring the pre-change graphics
-settings (`vSync=2`, FSR off, AF off) brought the visible prologue back at
-3.4–4.0 fps with no device removal, including a native 1920×1080 check at
-3.9 fps.
+back at `1684989` plus the opening patch. Restoring `vSync=2` and FSR off
+brought the visible prologue back at 3.4–4.0 fps. A later quality profile
+(AF 16, near-material LOD 1.0, `lodScale=0.8`, `VICTORY_INPLACE_MB=4096`) held
+**4.0–4.1 fps at native 1920×1080** with 0 device removals, and the materials
+are visibly sharper.
 
 The prologue is the deepest verified point. Its shadows are still black and
-its frame rate is 2.2 fps at the default resolution, or 4.0–4.2 fps in the
-low-resolution performance configuration. **15–30 fps was not reached**; the
+its frame rate is 2.2 fps at the title defaults, 4.0–4.1 fps native with the
+quality profile, or 4.0–4.2 fps in the low-resolution performance
+configuration. **15–30 fps was not reached**; the
 remaining wall is 71–74 MB/frame of title-buffer readback plus per-record
 indirect mesh draws. The rest of the world and story is untested. What *is*
 working end to end is the pipeline: validate the dump → detect the machine →
