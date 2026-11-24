@@ -111,7 +111,63 @@ the title's own first-boot screen — dark background, bottom-right
 **"ACCOUNT PICKER  (Y)   SCREEN NARRATION (OFF)  (X)   PLAYER  (A)"** with Xbox
 button glyphs. That is the original game's UI, drawn by VIctory on the PC GPU.
 
-Captures stay in `logs/capture/` and are git-ignored: they are game content.
+Captures stay in `logs/capture*/` and are git-ignored: they are game content.
+
+### Driving the boot screens
+
+The diagnostics build's `VICTORY_KEYS=<seconds>:<key>,...` holds each key for
+0.2 s, focus or not. Two WARP runs used it: A presses first (every 10–15 s), then
+Down+Enter cycles from 190 s. The Terms screen had moved focus off Confirm, so
+one focused-window injection (Up, Up, Enter, Down, Down, Enter, 220 ms holds)
+checked Privacy and confirmed; that is the same host keyboard path, not a
+different input mechanism.
+
+What the title actually displayed, in order (WARP unless noted, seconds from
+the first-boot run's input start):
+
+| Screen | Seen at | What is on it |
+|---|---|---|
+| Account picker | 103 s | `ACCOUNT PICKER (Y)  PLAYER (A)` (the narration option appeared only before settings were saved) |
+| Rockstar logo | 114–126 s | neon colour logo, then monochrome |
+| Legal notices | 185 s | Copyright, then Photosensitivity Health Warning; `NEXT`, `BACK (B)` |
+| UI text size | 198 s | Small (Default) … `CONTINUE (A)` |
+| Subtitles | 212 s | Off (Default) … `CONTINUE (A)` |
+| Brightness | 218 s | Brightness Level 15, `ADJUST`, `CONTINUE (A)` |
+| Finish setup | 252 s | default controls note (LT to run and sprint), `SETTINGS`, `CONTINUE (A)` |
+| Legal Terms & Policies | 277 s | Privacy Policy / Terms of Service checkboxes, `CONFIRM` |
+| Terms accepted | 304 s | Terms checked, `Confirm — Confirm setup and start the game` |
+| Loading | after confirm | dark screen, small spinner at bottom right |
+| Loading art | WARP + hardware | original painted art (oranges, LEONIDA sign), then the Rockstar logo |
+| Start-screen art | WARP (dimmed) + hardware (full colour) | Jason with the LEONIDA tank top; Lucia with the motel backdrop |
+
+The brightness choice was written by the title to
+`…\victory\data\7952987A\storage\settings\settings.xml` — `gamma=15`,
+`desiredFPS=30`, `fsrQuality=2` — and a player save folder was created, so
+these are the game's own settings/profile code paths, not a UI mock.
+
+### Where the front end stops
+
+The start-screen key art renders, then the host device is removed while the
+menu scene compiles and draws. Measured on both adapters:
+
+* **WARP:** three runs removed the device with DXGI 0x887A0004 / 0x887A0005,
+  once at a 1-list submission with no breadcrumbs and once at a 28-list
+  submission (DRED breadcrumbs: 2048² and 4096² compute passes, 32³ volume
+  upload). Skipping the five heaviest compute pipelines removed all dispatches
+  (`dispatched=0`) but the device was still removed during front-end resource
+  work, so this is not only post-processing cost.
+* **RX 7600:** the cached run translated 1,826 shaders, then removed the device
+  after an 11-list submission with 0x887A0006. At that point it was at
+  0.6 fps / 1,600 ms per frame, 1,448 draws/frame with 1,561 draws dropped for
+  missing host pipelines. The desktop stayed responsive; the title's D3D12
+  device was removed and the process exited.
+* The log names mesh `093c64546c55554e` (11 draws/frame) and compute shaders
+  that fail translation with "a structured buffer of unknown stride",
+  "image_gather4_l", "a lane mask holding lanes elsewhere read as data", and
+  "a descriptor neither loaded nor built".
+
+The menu buttons/options were therefore never presented, and no world/gameplay
+frame was reached.
 
 ## What is implemented, what is verified
 
@@ -123,33 +179,38 @@ Captures stay in `logs/capture/` and are git-ignored: they are game content.
 | Runtime planning with fixes | yes | yes |
 | Runtime build (release + diag) | yes | yes, 2 successful builds |
 | DXC staging | yes | yes, DLLs copied next to the exe |
-| Launch + logging + exit diagnosis | yes | yes, 3 runs |
+| Launch + logging + exit diagnosis | yes | yes, 10 runs (release + diag, WARP + hardware) |
 | Title boot / rendering / audio / input | upstream | yes, evidence above |
-| Menus beyond first boot | upstream | no — needs input |
-| World / gameplay | upstream, incomplete | no |
+| Menus beyond first boot | upstream | yes — account picker, legal notices, setup wizard, terms, loading art, start-screen art |
+| Start-screen menu buttons | upstream | no — host device removed while the menu scene draws |
+| World / gameplay | upstream, incomplete | no — not reached |
 
 ## Remaining barriers
 
-1. **World rendering** (upstream): most of the scene is missing because
-   untranslated shaders drop draws, and frames take 0.5–1.8 s. Upstream numbers
-   for VIctory: mesh 8,191/8,506, vertex/pixel 10,617/12,346, compute
-   1,643/2,539 programs translated.
-2. **GPU safety**: entering the world on a real GPU can hang the display
-   driver. Use `projectz launch --warp` for software-adapter diagnostics.
-3. **Input automation**: advancing past the first-boot screens requires key
-   presses; `VICTORY_KEYS=30:Enter,45:Enter,…` drives them without a person at
-   the keyboard.
+1. **Front-end scene** (upstream): after 1,826 translated shaders the host
+   device is removed while the start-screen menu draws, on WARP and on the
+   RX 7600. Measured 1,600 ms/frame and 1,561 dropped draws at that point.
+2. **Shader translation gaps** (upstream): compute shaders using unknown-stride
+   structured buffers, `image_gather4_l`, cross-lane masks, or descriptors
+   neither loaded nor built are dropped; mesh `093c64546c55554e` has no host
+   pipeline.
+3. **World rendering** remains untested behind the front-end failure; the
+   earlier upstream warning about world entry and display-driver hangs still
+   stands.
 4. **No Visual Studio** on this machine: fine for the GNU target, but upstream
    CI and D3D12 debugging aids assume MSVC.
 
 ## Next steps
 
-1. Advance through first-boot screens with `VICTORY_KEYS`, capture the menus and
-   the start screen; keep the world entry for a WARP run.
-2. Measure world frames with `VICTORY_SHADER_LOOP_LIMIT` and
-   `VICTORY_SKIP_PIPELINES` to see which pipelines dominate — this is the
-   upstream bottleneck, not a launcher issue.
-3. Build XCL through the same tooling (`projectz build --runtime xcl`) and
+1. Reproduce the hardware 11-list submission with `VICTORY_D3D12_DEBUG=1` and
+   `VICTORY_GPU_TIMING=1`; identify the invalid command, then add the missing
+   converter op or skip only that pipeline.
+2. Close the four converter gaps above so the start-screen menu can present,
+   then capture its buttons/options.
+3. Only then measure world frames with `VICTORY_SHADER_LOOP_LIMIT` and
+   `VICTORY_SKIP_PIPELINES` — this is the upstream bottleneck, not a launcher
+   issue.
+4. Build XCL through the same tooling (`projectz build --runtime xcl`) and
    compare GTA VI bring-up progress between the two runtimes.
-4. Add a packaged, one-command setup for the toolchain (Rust + mingw + DXC) so a
+5. Add a packaged, one-command setup for the toolchain (Rust + mingw + DXC) so a
    clean machine needs no manual steps.
