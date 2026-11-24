@@ -3,6 +3,9 @@
 Measured 2026-11-24 on Windows 11 26300, Ryzen 5 5600X, 32 GiB, Radeon RX
 7600 8 GB, native D3D12, title `7952987A` v1.0.2.1, Series X profile.
 
+The separate opening-pacing work (60 fps for the first 60 s, then the title's
+30 fps) is in [opening.md](opening.md).
+
 ## Result
 
 **The 15–30 fps target was not reached.** The best stable result is

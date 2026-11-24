@@ -30,10 +30,15 @@ Verified today on Windows 11 26300, Ryzen 5 5600X, 32 GiB, RX 7600:
 | Audio | ✅ APU + DSP connected (256 streams), `audio.rpf` opened via DirectStorage |
 | Input | ✅ GameInput devices enumerated; prologue prompts “Move around / Move the camera” |
 | Menus | ✅ account picker → legal → setup → terms → start screen, at 29 fps |
+| Opening pacing | ✅ loading phase at **60 fps for its first 60 s**, then the title's own 30 fps; no present warnings |
 | Opening cutscene | ✅ plays in order, lit, with its illustrated credit cards |
 | World | ✅ prologue renders characters, yard, watchtower and sky at 2.2–4.2 fps; shadowed areas are black |
 | Gameplay | ✅ prologue scene and HUD; movement not actuated |
 | Device stability | ✅ 0 removals in a 15-minute run with the fork and the AMD skip list |
+
+The opening's real-time loading phase is paced at 60 fps for its first 60
+seconds by a small fork patch; the title's authored 30 fps resumes for the
+static key art. See [docs/opening.md](docs/opening.md).
 
 The prologue is the deepest verified point. Its shadows are still black and
 its frame rate is 2.2 fps at the default resolution, or 4.0–4.2 fps in the
@@ -78,8 +83,8 @@ $env:VICTORY_SHADER_LOOP_LIMIT = '256'
 See [docs/launcher.md](docs/launcher.md) for every command, config key and exit
 code, [docs/architecture.md](docs/architecture.md) for how the layers fit, and
 [docs/status.md](docs/status.md) for the full measurement log and next steps,
-and [docs/performance.md](docs/performance.md) for the frame-rate investigation
-and the exact performance configuration.
+and [docs/performance.md](docs/performance.md) for the frame-rate investigation,
+and [docs/opening.md](docs/opening.md) for the 60 fps opening window.
 
 ## Repository layout
 
@@ -92,9 +97,11 @@ ZZ-box/                       (github.com/4Sakens/Project-Z-GTA)
 │   ├── architecture.md       how the pipeline composes the runtimes
 │   ├── status.md             measured status, evidence, remaining work
 │   ├── performance.md        FPS measurements, bottlenecks, rejected switches
+│   ├── opening.md            opening pacing, 60 fps window, caveats
 │   └── integration.md        the four-effort merge plan
 ├── fivestar/                 FiveStar Recomp (submodule)
 ├── xbox2windows/             Xbox2Windows (submodule)
+├── patches/                  fork patches applied to D:\VIctory
 ├── pyproject.toml            projectz packaging
 ├── projectz.example.toml     configuration template
 └── Cargo.toml                Rust workspace stub for the grafted crates

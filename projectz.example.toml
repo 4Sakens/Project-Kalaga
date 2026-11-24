@@ -44,3 +44,6 @@ extra_args = []
 [launch.extra_env]
 # VICTORY_GPU_TIMING = '1'
 # VICTORY_D3D12_DRED = '1'
+# Requires patches/0001-opening-60fps-window.patch; see docs/opening.md.
+# VICTORY_FRAME_INTERVAL_US = '16667'
+# VICTORY_FRAME_60_SECONDS = '60'

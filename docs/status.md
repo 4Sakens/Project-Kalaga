@@ -199,6 +199,17 @@ of buffers were placeable, so the readback remains.
 machine. The two changes that could get there are a safe indirect window and
 in-place view memory / direct shader writes.
 
+### Opening pacing (2026-11-24)
+
+The title requests 33.333 ms frames for its front end. A reversible fork patch
+(`patches/0001-opening-60fps-window.patch`) overrides that to 16.667 ms for the
+first 60 seconds, then restores the title's interval. With the override passed
+through `[launch.extra_env]`, the loading phase runs at **60–62 fps / 16.1–16.7
+ms**, and after the cutoff the key art returns to **30 fps / 33.3 ms** with
+**zero** “wait not met at a present” warnings. An unrestricted 60 fps override
+produced those warnings and is not used. Details and caveats are in
+[opening.md](opening.md).
+
 ### Upstream sources checked
 
 * [`fxceless/victory-gta6`](https://github.com/fxceless/victory-gta6) at
@@ -221,9 +232,10 @@ in-place view memory / direct shader writes.
 | Runtime planning with fixes | yes | yes |
 | Runtime build (release + diag) | yes | yes, 3 successful builds (release, diag, fork diag) |
 | DXC staging | yes | yes, DLLs copied next to the exe |
-| Launch + logging + exit diagnosis | yes | yes, 18 runs (release + diag, WARP + hardware + fork) |
+| Launch + logging + exit diagnosis | yes | yes, 19 runs (release + diag, WARP + hardware + fork) |
 | Title boot / rendering / audio / input | upstream | yes, evidence above |
 | Menus beyond first boot | fork | yes — account picker, legal notices, setup wizard, terms, loading art, start-screen art, opening cutscene |
+| Opening pacing | fork + patch | yes — 60 fps for the first 60 s of loading, then the title's 30 fps; zero present warnings |
 | Start-screen menu buttons | fork | not captured — the profile picker advanced into the cutscene |
 | World / gameplay | fork, incomplete | yes — prologue renders with HUD at 2.2 fps default, 4.0–4.2 fps best at 640×360; movement not actuated |
 | Ray-traced shadows / bounce light | fork | no — shadowed surfaces are black |
