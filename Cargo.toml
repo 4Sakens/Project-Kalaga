@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+
+# Z-GTA — Phase 1: unified Xbox Series X|S on Windows runtime.
+# Merges the platform layer (XCL) and the Grand Theft Auto VI game layer
+# (VIctory) into a single workspace. Sources live in their own checkouts for
+# now; the members move in as the integration grafts land. See docs/integration.md.
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-2.0-or-later"
+
+[workspace.dependencies]
+# Platform layer (XCL runtime).
+xcl = { path = "../xcl/crates/xcl" }
+# Grand Theft Auto VI game layer (VIctory).
+victory-core = { path = "../VIctory/crates/victory-core" }
+victory-pe = { path = "../VIctory/crates/victory-pe" }
+victory-loader = { path = "../VIctory/crates/victory-loader" }
+victory-hle = { path = "../VIctory/crates/victory-hle" }
+victory-gpu = { path = "../VIctory/crates/victory-gpu" }
+victory-shader = { path = "../VIctory/crates/victory-shader" }
+victory-formats = { path = "../VIctory/crates/victory-formats" }
+victory-pipeline = { path = "../VIctory/crates/victory-pipeline" }
+victory-game = { path = "../VIctory/crates/victory-game" }
