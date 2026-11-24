@@ -169,12 +169,35 @@ hardware run measured:
 | Device removals | **0** in 15 minutes |
 | Saves | autosave written during the run |
 
+A later performance run at 640×360 reached 4.0–4.2 fps; see the frame-rate
+investigation below.
+
 The cutscene plays in order with its illustrated credit cards, and the
 prologue renders a lit prison yard: characters, watchtower, sky, and the
 game's own HUD prompts (“Move around” / “Move the camera”). Shadowed surfaces
 are black, as the fork documents: its ray-traced bounce light and shadows are
 not implemented yet. The movement prompt was observed but movement was not
 actuated.
+
+### Frame-rate investigation (2026-11-24)
+
+The target was 15–30 fps in the prologue. The best stable result is **4.0–4.2
+fps (240–249 ms/frame)** at 640×360 with the relay and in-place stage 2, up
+from 2.2 fps. Menus remain at 29–30 fps. The full matrix, per-command GPU
+timings, exact environment and the rejected switches are in
+[performance.md](performance.md).
+
+The measured frame is GPU 132–142 ms, preparation 96–105 ms and readback
+164–177 ms for 71–74 MB. The GPU is dominated by 5,090 single-record indirect
+mesh draws at ~18 µs each, not fill rate. `VICTORY_INDIRECT_WINDOW=1` targets
+those records but folded in a 59,153-group record, asked for 135,526
+groups/frame and removed the device (`0x887A0005`); it is not usable at
+`1684989`. In-place stage 2 cannot be combined with the relay, and only 30 MB
+of buffers were placeable, so the readback remains.
+
+15–30 fps is therefore **not** a supported claim for the world on this
+machine. The two changes that could get there are a safe indirect window and
+in-place view memory / direct shader writes.
 
 ### Upstream sources checked
 
@@ -198,19 +221,21 @@ actuated.
 | Runtime planning with fixes | yes | yes |
 | Runtime build (release + diag) | yes | yes, 3 successful builds (release, diag, fork diag) |
 | DXC staging | yes | yes, DLLs copied next to the exe |
-| Launch + logging + exit diagnosis | yes | yes, 11 runs (release + diag, WARP + hardware + fork) |
+| Launch + logging + exit diagnosis | yes | yes, 18 runs (release + diag, WARP + hardware + fork) |
 | Title boot / rendering / audio / input | upstream | yes, evidence above |
 | Menus beyond first boot | fork | yes — account picker, legal notices, setup wizard, terms, loading art, start-screen art, opening cutscene |
 | Start-screen menu buttons | fork | not captured — the profile picker advanced into the cutscene |
-| World / gameplay | fork, incomplete | yes — prologue renders with HUD at 2.2 fps; movement not actuated |
+| World / gameplay | fork, incomplete | yes — prologue renders with HUD at 2.2 fps default, 4.0–4.2 fps best at 640×360; movement not actuated |
 | Ray-traced shadows / bounce light | fork | no — shadowed surfaces are black |
 
 ## Remaining barriers
 
 1. **Black shadows** (fork): the game's ray-traced bounce light and shadows do
    not run yet, so anything the sun does not hit directly is black.
-2. **World frame rate** (fork): 2.2 fps in the prologue, 460 ms/frame, with the
-   card about 45% busy; compute and per-frame preparation dominate.
+2. **World frame rate** (fork): 2.2 fps at the default resolution, 4.0–4.2 fps
+   in the low-resolution performance configuration. The measured wall is
+   71–74 MB/frame of title-buffer readback plus ~95 ms of single-record
+   indirect mesh draws; see [performance.md](performance.md).
 3. **Input and gameplay depth**: the prologue HUD prompts were seen, but
    movement, the pause menu and save/load in gameplay were not actuated.
 4. **World beyond the prologue** was not reached in this run.
@@ -221,9 +246,11 @@ actuated.
 
 1. Verify movement and the pause menu in the prologue (WASD / pad), then
    capture a moved frame and the menu.
-2. Measure `VICTORY_RELAY=2` and
-   `VICTORY_LATE_WAIT=3 VICTORY_WIDE_BACK=1 VICTORY_CARD_BUFFERS_MIN_MB=1`
-   against the 2.2 fps baseline; the fork documents both as faster.
+2. In the fork, fix `VICTORY_INDIRECT_WINDOW` so a window cannot include a
+   record above a sane group budget (it currently device-removes), and make
+   view memory placeable or writable directly, to remove the 71–74 MB/frame
+   readback. Both are required before 15 fps is plausible; see
+   [performance.md](performance.md).
 3. Implement the fork's missing ray-traced bounce light and shadows (see
    `docs/fork-ray-tracing.md`) so shadowed areas stop rendering black.
 4. Build XCL when MSVC and the Windows SDK are available, or add a documented

@@ -25,20 +25,23 @@ Verified today on Windows 11 26300, Ryzen 5 5600X, 32 GiB, RX 7600:
 | Game dump validation | ✅ 108/108 manifest files, 22 RPF9 archives, 208.6 GiB, title `7952987A` v1.0.2.1 |
 | Build without Visual Studio | ✅ `victory.exe` (45 MB) via Rust 1.98.1 GNU + mingw-w64, 1m00s |
 | Runtime boot | ✅ title mapped, virtual drive `G:` → dump, offline user, Series X mode |
-| Rendering | ✅ menus at **29 fps**; prologue at **2.2 fps** (460 ms/frame) |
+| Rendering | ✅ menus at **29 fps**; prologue at **2.2 fps** default, **4.0–4.2 fps** best at 640×360 |
 | UI | ✅ boot screens, setup wizard, terms, start-screen art and prologue HUD captured |
 | Audio | ✅ APU + DSP connected (256 streams), `audio.rpf` opened via DirectStorage |
 | Input | ✅ GameInput devices enumerated; prologue prompts “Move around / Move the camera” |
 | Menus | ✅ account picker → legal → setup → terms → start screen, at 29 fps |
 | Opening cutscene | ✅ plays in order, lit, with its illustrated credit cards |
-| World | ✅ prologue renders characters, yard, watchtower and sky at 2.2 fps; shadowed areas are black |
+| World | ✅ prologue renders characters, yard, watchtower and sky at 2.2–4.2 fps; shadowed areas are black |
 | Gameplay | ✅ prologue scene and HUD; movement not actuated |
 | Device stability | ✅ 0 removals in a 15-minute run with the fork and the AMD skip list |
 
 The prologue is the deepest verified point. Its shadows are still black and
-its frame rate is 2.2 fps; the rest of the world and story is untested. What
-*is* working end to end is the pipeline: validate the dump → detect the machine
-→ build the runtime → stage DXC → launch the original executable → capture
+its frame rate is 2.2 fps at the default resolution, or 4.0–4.2 fps in the
+low-resolution performance configuration. **15–30 fps was not reached**; the
+remaining wall is 71–74 MB/frame of title-buffer readback plus per-record
+indirect mesh draws. The rest of the world and story is untested. What *is*
+working end to end is the pipeline: validate the dump → detect the machine →
+build the runtime → stage DXC → launch the original executable → capture
 evidence and a diagnostic report.
 
 ## Quick start
@@ -74,7 +77,9 @@ $env:VICTORY_SHADER_LOOP_LIMIT = '256'
 
 See [docs/launcher.md](docs/launcher.md) for every command, config key and exit
 code, [docs/architecture.md](docs/architecture.md) for how the layers fit, and
-[docs/status.md](docs/status.md) for the full measurement log and next steps.
+[docs/status.md](docs/status.md) for the full measurement log and next steps,
+and [docs/performance.md](docs/performance.md) for the frame-rate investigation
+and the exact performance configuration.
 
 ## Repository layout
 
@@ -86,6 +91,7 @@ ZZ-box/                       (github.com/4Sakens/Project-Z-GTA)
 │   ├── launcher.md           commands, configuration, troubleshooting
 │   ├── architecture.md       how the pipeline composes the runtimes
 │   ├── status.md             measured status, evidence, remaining work
+│   ├── performance.md        FPS measurements, bottlenecks, rejected switches
 │   └── integration.md        the four-effort merge plan
 ├── fivestar/                 FiveStar Recomp (submodule)
 ├── xbox2windows/             Xbox2Windows (submodule)
