@@ -79,15 +79,42 @@ run after it):
   find which of the three makes the patches. The PR's own notes call its
   8-dword case (taking an unused descriptor as a 2D texture) a shortcut.
 
-### 2. Replace the AMD skip list — medium
+### 2. Replace the AMD skip list — in progress
 
 The 43 skips work around AMD's shader compiler crashing
 (`amdxc64.dll+0x85fd0f`). Fork issue #422 reports that `VICTORY_SHADER_OPT=59`
-(fewer clean-up passes in the emitted shaders) clears that crash on RDNA4.
-Test it on the RX 7600 with the skip list removed. If it holds, the 41
-`CS_RaytracingResolve` variants (the composite of the traced light) and the 2
-meshlet-culling programs come back. Fallback: un-skip in halves to find the
-real offenders. Each run uses copied saves.
+clears that crash on RDNA4. `59` keeps every clean-up pass except pass 4 (“one
+instruction for one value”).
+
+Results on the RX 7600 (test copy with PR #203, native):
+
+| Run | Skip list | `SHADER_OPT` | Crash | Gameplay fps (warm) | GPU ms | Draws/frame | Log |
+|---|---|---|---|---|---|---|---|
+| reference | 43 AMD + 3 jacket | all passes | none | 3.8–4.3 | 120–160 | ~4,800 | `victory-20261124-211251.log` |
+| A | 43 AMD + 3 jacket | 59 | none | 3.8–5.4 | 75–148 | 4,400–5,700 | `victory-20261124-214908.log` |
+| B | 3 jacket only | 59 | **none in 10+ min** | 0.9–1.0 | 887 | ~6,800 | `victory-20261124-213256.log` |
+| B′ | 3 jacket only | 59, GPU timing on | none | 2.0–2.1 | ~300 | 6,500–7,300 | `victory-20261124-215801.log` |
+
+- `SHADER_OPT=59` costs nothing (A).
+- **Without the skip list, AMD's compiler did not crash on this card.** 12 of
+  the 43 programs were used in the prologue and all compiled: ten
+  `CS_RaytracingResolve` variants and the two meshlet-culling programs
+  (`eeed82b877b44b5f`, `fc5e66f8f873d3bb`). The other 31 were not used in
+  these scenes.
+- **But it is much slower and looks wrong in places.** Draws per frame rise
+  from ~4,800 to 6,500–7,300, and gameplay drops to 0.9–2.1 fps. One capture
+  of the common room has no ceiling (sky where earlier runs show the ceiling
+  and lamps; `logs/step2-opt59-commonroom.png`). The rise in draws points at
+  the two culling programs: with them running, more geometry is submitted, and
+  some is culled wrongly. The prologue moves on by itself, so B and B′ are in
+  different rooms from A. The fps numbers are not like-for-like, but the
+  GPU-time gap is far larger than the scenes explain.
+- Next: re-enable only the ten resolve variants (culling kept skipped) to
+  split the two causes. That run (`logs/step2-resolves-config.toml`) was cut
+  short when another session started a game. The list of the twelve is in
+  `logs/step2-bound12.txt`.
+- **Kept for now:** the full skip list in the test config. Playable speed
+  matters more until the culling question is answered.
 
 ### 3. Turn the builder on — medium
 

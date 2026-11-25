@@ -29,6 +29,7 @@ is the cost of the memory refresh it triggers.
 | `Marvisak/VIctory` (upstream, 11,437 stars) | Generic runtime. Open work on BVH instruction emulation (#1533 “emulate image_bvh as miss”, #1794 a16 rays / unsorted nodes, #1883 traversal lane masks). Nothing GTA-lighting specific is working. |
 | `ivall/xcl` (7,877 stars) | No BVH or ray-tracing issues found; not on this path. |
 | FiveStar, Xbox2Windows | Separate implementations (see [upstream-review.md](upstream-review.md)); no ray-traced lighting. |
+| `Zettrox/ztrx` (369 stars, created 2026-11-25) | A re-upload of the fork at `2119b0e` (older than our `31714de`) plus one commit: its own README and a 15-line launch script. Reports, on an RTX 3050: prologue playable from the cell to the boat chase, 1.5 h without a crash, 1–3 fps, and “anything in shadow is black” because the ray-traced lighting does not run. No new code. |
 
 ## The builder on other cards
 
