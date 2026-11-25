@@ -52,7 +52,7 @@ def bencode(value) -> bytes:
 
 
 def make_game(root: Path, *, magic: bytes = gamefs.RPF9_MAGIC, version: str = "1.0.2.1") -> Path:
-    game = root / "GTA6.Xbox.v1.0.2.1-CYBERLEEK"
+    game = root / "GTA6.Xbox.v1.0.2.1"
     (game / "data" / "ttdb").mkdir(parents=True)
     (game / "pack" / "story000").mkdir(parents=True)
     cfg = GAME_CONFIG.replace('Version="1.0.2.1"', f'Version="{version}"')
@@ -149,7 +149,7 @@ class ManifestTests(TempCase):
         game = make_game(self.root)
         torrent = self.root / "release.torrent"
         info = {
-            b"name": b"GTA6.Xbox.v1.0.2.1-CYBERLEEK",
+            b"name": b"GTA6.Xbox.v1.0.2.1",
             b"files": [
                 {b"path": [b"common.rpf"], b"length": 11},
                 {b"path": [b"pack", b"story000", b"story000.rpf"], b"length": 8},
@@ -177,7 +177,7 @@ class ManifestTests(TempCase):
                 entries.append(
                     {b"path": [p.encode() for p in parts], b"length": path.stat().st_size}
                 )
-        info = {b"name": b"GTA6.Xbox.v1.0.2.1-CYBERLEEK", b"files": entries}
+        info = {b"name": b"GTA6.Xbox.v1.0.2.1", b"files": entries}
         torrent.write_bytes(bencode({b"info": info}))
         report = gamefs.verify_manifest(game, torrent)
         self.assertTrue(report.exact, report.to_dict())

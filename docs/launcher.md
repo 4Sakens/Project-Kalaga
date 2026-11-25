@@ -74,7 +74,7 @@ Exit codes: `0` ok, `2` invalid/unsupported dump, `3` prerequisites missing,
 ### validate
 
 ```text
-game dir   : D:\GTA 6\GTA6.Xbox.v1.0.2.1-CYBERLEEK
+game dir   : D:\GTA 6\GTA6.Xbox.v1.0.2.1
 title      : Grand Theft Auto VI  id=7952987A  version=1.0.2.1
 publisher  : Rockstar Games
 executable : game_scarlett_master.exe
@@ -140,7 +140,7 @@ composition, DXC staging and CLI exit codes.
 Set `PROJECTZ_REAL_GAME` to a real dump to add the integration check:
 
 ```powershell
-$env:PROJECTZ_REAL_GAME = 'D:\GTA 6\GTA6.Xbox.v1.0.2.1-CYBERLEEK'
+$env:PROJECTZ_REAL_GAME = 'D:\GTA 6\GTA6.Xbox.v1.0.2.1'
 python -m unittest tests.test_projectz.RealDumpTests -v
 ```
 

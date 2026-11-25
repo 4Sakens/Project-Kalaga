@@ -18,7 +18,7 @@ plan. Where a statement comes from an upstream project instead, it says so.
 ## Game files
 
 ```text
-game dir   : D:\GTA 6\GTA6.Xbox.v1.0.2.1-CYBERLEEK
+game dir   : D:\GTA 6\GTA6.Xbox.v1.0.2.1
 title      : Grand Theft Auto VI  id=7952987A  version=1.0.2.1
 publisher  : Rockstar Games
 executable : game_scarlett_master.exe
@@ -70,7 +70,7 @@ valid PE32+ x64 (`machine 0x8664`). A diagnostics build
 Command composed by `projectz launch`:
 
 ```text
-D:\VIctory\target\x86_64-pc-windows-gnu\release\victory.exe run "D:\GTA 6\GTA6.Xbox.v1.0.2.1-CYBERLEEK\game_scarlett_master.exe" --execute --console series-x
+D:\VIctory\target\x86_64-pc-windows-gnu\release\victory.exe run "D:\GTA 6\GTA6.Xbox.v1.0.2.1\game_scarlett_master.exe" --execute --console series-x
 ```
 
 Boot sequence from the log:
@@ -79,7 +79,7 @@ Boot sequence from the log:
 build          unknown (b99f876b74d4a77f03af5f878223b27bd647b5c35a79d5decd9f716504239e93)
 image mapped base=0x7ff8a7170000 preferred=0x140000000
 title          7952987A, storage ...\victory\data\7952987A/storage (2048 MB)
-virtual drive  drive=G root=D:\GTA 6\GTA6.Xbox.v1.0.2.1-CYBERLEEK
+virtual drive  drive=G root=D:\GTA 6\GTA6.Xbox.v1.0.2.1
 console        Xbox Series X
 title dll      xboxbvhbuilder.dll, amd_fidelityfx_loader_xbox.dll
 ```

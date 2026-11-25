@@ -3,7 +3,7 @@
 
 [game]
 # The dump to run. Leave empty to search `root` with `projectz locate`.
-dir = 'D:\GTA 6\GTA6.Xbox.v1.0.2.1-CYBERLEEK'
+dir = ''  # empty: projectz locate/find_games searches `root`
 root = 'D:\GTA 6'
 
 # Refuse to run a dump that does not match the supported build.
