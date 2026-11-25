@@ -1,6 +1,6 @@
-# Project-Z tooling (`projectz`)
+# Project Kalaga tooling (`kalaga`)
 
-`projectz` is the glue layer of Project Z-GTA. It does not reimplement the
+`kalaga` is the glue layer of Project Kalaga. It does not reimplement the
 runtime: it locates and validates the local console dump, checks what the
 machine can actually build and run, builds the Rust runtime with the correct
 toolchain, stages the shader compiler, starts the title through it, and writes
@@ -22,7 +22,7 @@ That is what this layer does, and it is the piece that a launcher needs.
 Nothing to install; run it from the repository root:
 
 ```powershell
-python -m projectz --help
+python -m kalaga --help
 python -m unittest discover -s tests -v      # 33 tests
 ```
 
@@ -30,13 +30,13 @@ Optionally install the console entry point:
 
 ```powershell
 pip install -e .
-projectz doctor
+kalaga doctor
 ```
 
 ## Configuration
 
-Copy `projectz.example.toml` to `projectz.toml` (git-ignored) and set the paths.
-Resolution order: `--config`, `PROJECTZ_CONFIG`, `projectz.toml`, defaults.
+Copy `kalaga.example.toml` to `kalaga.toml` (git-ignored) and set the paths.
+Resolution order: `--config`, `KALAGA_CONFIG`, `kalaga.toml`, defaults.
 
 | Key | Meaning |
 |---|---|
@@ -103,18 +103,18 @@ Every blocker carries its fix, e.g.:
 ```text
 [victory] build=True run=True
     note: VIctory boots the title and runs its menus at the title's own 30 fps; ...
-    note: On a real GPU the world can hang the display driver; use `projectz launch --warp` ...
+    note: On a real GPU the world can hang the display driver; use `kalaga launch --warp` ...
 [xcl] build=True run=False
     warn: xcl is not built yet
-             fix: run `projectz build`
+             fix: run `kalaga build`
 ```
 
 ### launch
 
 ```powershell
-python -m projectz launch --dry-run     # print the exact command and env
-python -m projectz launch --warp        # software adapter, safest diagnostic run
-python -m projectz launch
+python -m kalaga launch --dry-run     # print the exact command and env
+python -m kalaga launch --warp        # software adapter, safest diagnostic run
+python -m kalaga launch
 ```
 
 `launch` copies `dxcompiler.dll`/`dxil.dll` next to the runtime executable when
@@ -137,11 +137,11 @@ manifest comparison, config layering, planner decisions (missing linker,
 missing DXC, unbuilt runtime, invalid dump), target-triple layout, command
 composition, DXC staging and CLI exit codes.
 
-Set `PROJECTZ_REAL_GAME` to a real dump to add the integration check:
+Set `KALAGA_REAL_GAME` to a real dump to add the integration check:
 
 ```powershell
-$env:PROJECTZ_REAL_GAME = 'D:\GTA 6\GTA6.Xbox.v1.0.2.1'
-python -m unittest tests.test_projectz.RealDumpTests -v
+$env:KALAGA_REAL_GAME = 'D:\GTA 6\GTA6.Xbox.v1.0.2.1'
+python -m unittest tests.test_kalaga.RealDumpTests -v
 ```
 
 ## Limits

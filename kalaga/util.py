@@ -1,4 +1,4 @@
-"""Small process / formatting helpers shared by the Project-Z tools."""
+"""Small process / formatting helpers shared by the Project Kalaga tools."""
 
 from __future__ import annotations
 

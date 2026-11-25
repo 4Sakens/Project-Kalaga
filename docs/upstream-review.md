@@ -9,8 +9,8 @@ branches read, and the open/merged/closed PRs and issues sampled through
 
 | Path | Remote | Head reviewed | Relevance |
 |---|---|---|---|
-| `D:\ZZ-box` | `4Sakens/Project-Z-GTA` (GitHub now redirects to `4Sakens/Z-GTA`) | `7b80610` | **Main project.** Launcher, validation, build/launch glue. |
-| `D:\VIctory` | fork `fxceless/victory-gta6`; upstream `Marvisak/VIctory` | fork `4e17478` (local main kept at `1684989` + opening patch) | GTA VI runtime that Project-Z builds and launches. |
+| `D:\ZZ-box` | `4Sakens/Project-Kalaga` (GitHub now redirects to `4Sakens/Z-GTA`) | `7b80610` | **Main project.** Launcher, validation, build/launch glue. |
+| `D:\VIctory` | fork `fxceless/victory-gta6`; upstream `Marvisak/VIctory` | fork `4e17478` (local main kept at `1684989` + opening patch) | GTA VI runtime that Project Kalaga builds and launches. |
 | `D:\xcl` | upstream `xcl-dev/xcl`; `ivall/xcl` | `1d027e5` upstream (233 commits ahead of local `e50836b`) | General console runtime; not the current GTA VI path. |
 | `D:\ZZ-box\fivestar` | `ThatRecompDev/five-star-recomp` | `f93d000` (109 commits ahead) | Separate C# GTA VI recompilation effort. |
 | `D:\ZZ-box\xbox2windows` | `R0Y00/Xbox2Windows` | `18fe83d5` (425 commits ahead) | Static-recomp research and GPU tests. |
@@ -71,13 +71,13 @@ checkout without a build/test would change an untested platform layer.
 FiveStar is GPL-3.0 and moved 109 commits (shader lanes, DXIL backend, texture
 uploads, memory waits). Xbox2Windows is MIT and moved 425 commits (CPU/GPU
 tests, packed fixtures, D3D12.X research). Both are adjacent research, not the
-runtime Project-Z launches; copying either would duplicate a different
+runtime Project Kalaga launches; copying either would duplicate a different
 implementation. No changes were taken.
 
 ### Unrelated checkouts
 
 `mkw-web`, `Wiicompiled` and `emsdk` are Mario Kart/web/emscripten work with
-no GTA VI or Project-Z integration point. They were inspected and left alone.
+no GTA VI or Project Kalaga integration point. They were inspected and left alone.
 
 ## Integration attempt and rollback
 
@@ -128,10 +128,10 @@ is installed now.
 - FiveStar: **GPL-3.0**.
 - Xbox2Windows: **MIT**.
 
-No source from these repositories was copied into Project-Z in this review.
+No source from these repositories was copied into Project Kalaga in this review.
 The retained fork change is the opening-pacing patch, already attributed in
 `patches/0001-opening-60fps-window.patch` and `docs/opening.md`. The trial
-commits keep their original authors and are GPL-3.0. Project-Z has no
+commits keep their original authors and are GPL-3.0. Project Kalaga has no
 top-level licence file; that policy decision is left to the owner rather than
 silently relicensing the repo.
 

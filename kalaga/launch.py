@@ -73,11 +73,11 @@ def stage_dependencies(assessment: Assessment, cfg: Config) -> list[Path]:
 def compose(assessment: Assessment, scan: gamefs.GameScan, cfg: Config) -> LaunchPlan:
     if assessment.executable is None:
         raise RuntimeError(
-            f"{assessment.runtime} is not built; run `projectz build` first"
+            f"{assessment.runtime} is not built; run `kalaga build` first"
         )
     title = _title_exe(scan)
     if not title:
-        raise RuntimeError("no title executable found; run `projectz validate`")
+        raise RuntimeError("no title executable found; run `kalaga validate`")
 
     logs = cfg.logs_dir
     logs.mkdir(parents=True, exist_ok=True)

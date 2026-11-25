@@ -82,7 +82,7 @@ def _buildable_source(
                 "source-missing",
                 f"no Rust crate found at {source_dir}",
                 "clone the runtime next to this repository and set runtime."
-                f"{'victory_dir' if 'V' in str(source_dir) else 'xcl_dir'} in projectz.toml",
+                f"{'victory_dir' if 'V' in str(source_dir) else 'xcl_dir'} in kalaga.toml",
             )
         )
         return False
@@ -92,7 +92,7 @@ def _buildable_source(
             Blocker(
                 "no-cargo",
                 "cargo is not installed",
-                "install Rust (https://rustup.rs), then rerun `projectz doctor`",
+                "install Rust (https://rustup.rs), then rerun `kalaga doctor`",
             )
         )
         return False
@@ -103,7 +103,7 @@ def _buildable_source(
                     "no-linker",
                     "no linker for the GNU target: gcc was not found",
                     "install mingw-w64 (or set runtime.toolchain_bin to its bin folder) "
-                    "and rerun `projectz doctor`",
+                    "and rerun `kalaga doctor`",
                 )
             )
             return False
@@ -171,7 +171,7 @@ def assess(
     if not scan.ok:
         details = "; ".join(i.detail for i in scan.errors[:3]) or "game files not validated"
         result.blockers.append(
-            Blocker("game", f"game files are not usable: {details}", "run `projectz validate`")
+            Blocker("game", f"game files are not usable: {details}", "run `kalaga validate`")
         )
 
     if not result.source_dir.is_dir():
@@ -233,7 +233,7 @@ def assess(
             Blocker(
                 "not-built",
                 f"{runtime} is not built yet",
-                "run `projectz build`",
+                "run `kalaga build`",
                 severity="warn",
             )
         )
@@ -243,7 +243,7 @@ def assess(
             "the world loads but renders incompletely. Expect 0.5-1.8 s frames there."
         )
         result.notes.append(
-            "On a real GPU the world can hang the display driver; use `projectz launch --warp` "
+            "On a real GPU the world can hang the display driver; use `kalaga launch --warp` "
             "for a software-adapter diagnostics run."
         )
 

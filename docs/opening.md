@@ -36,8 +36,8 @@ A small, reversible patch to `crates/victory-gpu/src/frame.rs`:
   cleanly so no tick is lost or repeated.
 
 The patch is [`patches/0001-opening-60fps-window.patch`](../patches/0001-opening-60fps-window.patch).
-`projectz.toml` passes the two values through `[launch.extra_env]`, so a normal
-`python -m projectz launch` uses them.
+`kalaga.toml` passes the two values through `[launch.extra_env]`, so a normal
+`python -m kalaga launch` uses them.
 
 ## Measured result
 
@@ -89,7 +89,7 @@ cargo +1.98.1-x86_64-pc-windows-gnu build --profile release --features diagnosti
   -p victory --target x86_64-pc-windows-gnu
 ```
 
-`projectz.toml`:
+`kalaga.toml`:
 
 ```toml
 [launch.extra_env]

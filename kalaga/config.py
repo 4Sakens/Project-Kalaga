@@ -1,10 +1,11 @@
-"""Layered configuration for the Project-Z launcher.
+"""Layered configuration for the Project Kalaga launcher.
 
 Resolution order (first hit wins):
 
 1. ``--config PATH`` on the command line
-2. ``PROJECTZ_CONFIG`` environment variable
-3. ``projectz.toml`` at the repository root (git-ignored, machine-local)
+2. ``KALAGA_CONFIG`` environment variable (``PROJECTZ_CONFIG`` still works)
+3. ``kalaga.toml`` at the repository root (git-ignored, machine-local), or
+   the old ``projectz.toml`` if only that exists
 4. built-in defaults
 
 Nothing in this module imports the game or the runtimes; it only describes
@@ -96,12 +97,16 @@ def _as_str(value, default: str = "") -> str:
 
 def load(path: str | os.PathLike | None = None) -> Config:
     explicit = Path(path) if path else None
-    if explicit is None and os.environ.get("PROJECTZ_CONFIG"):
-        explicit = Path(os.environ["PROJECTZ_CONFIG"])
+    for variable in ("KALAGA_CONFIG", "PROJECTZ_CONFIG"):
+        if explicit is None and os.environ.get(variable):
+            explicit = Path(os.environ[variable])
     if explicit is None:
-        candidate = REPO_ROOT / "projectz.toml"
-        if candidate.is_file():
-            explicit = candidate
+        # The project was called Project-Z; an old local config still loads.
+        for name in ("kalaga.toml", "projectz.toml"):
+            candidate = REPO_ROOT / name
+            if candidate.is_file():
+                explicit = candidate
+                break
 
     cfg = Config()
     if explicit is None or not explicit.is_file():

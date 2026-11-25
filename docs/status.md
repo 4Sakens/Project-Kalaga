@@ -63,11 +63,11 @@ $ cargo +1.98.1-x86_64-pc-windows-gnu build --release -p victory --target x86_64
 Output: `D:\VIctory\target\x86_64-pc-windows-gnu\release\victory.exe` — 45 MB,
 valid PE32+ x64 (`machine 0x8664`). A diagnostics build
 (`--profile diag --features diagnostics`) also succeeds through
-`python -m projectz build --diag` in 1m 03s.
+`python -m kalaga build --diag` in 1m 03s.
 
 ## Run — what actually happened
 
-Command composed by `projectz launch`:
+Command composed by `kalaga launch`:
 
 ```text
 D:\VIctory\target\x86_64-pc-windows-gnu\release\victory.exe run "D:\GTA 6\GTA6.Xbox.v1.0.2.1\game_scarlett_master.exe" --execute --console series-x
@@ -272,9 +272,11 @@ shaders. With that cherry-pick, `VICTORY_WAVE_MASK_ELSEWHERE=0` and only
 translate: prologue hair/yard/prisoners are lit, gameplay is 3.6 fps, and the
 run has **0 device removals**. Exact masks alone leave the face black because
 the transpose program still fails; the mask approximation is no longer needed.
-The cell was not re-captured with this exact-mask combination; the earlier
-both-switches run remains the cell evidence (bunk, bars and bedding visible,
-faces and unlit fabric dark). The builder was off. Details:
+A cell capture with this exact-mask combination (run D, 0 removals, 3.2–5.2
+fps) shows the cell and cell block still essentially unlit: lamp panels glow
+but light nothing around them, and faces and clothing are black. The earlier
+“partial cell light” claim had no supporting image and is withdrawn. Indoor
+light is **not** restored. The builder was off. Details:
 [shadow-mask-test.md](shadow-mask-test.md) and
 [light-passes.md](light-passes.md).
 

@@ -1,10 +1,10 @@
-"""Tests for the Project-Z tooling.
+"""Tests for the Project Kalaga tooling.
 
 Run from the repository root:
 
     python -m unittest discover -s tests -v
 
-A real 200 GiB dump is validated only when PROJECTZ_REAL_GAME points at it.
+A real 200 GiB dump is validated only when KALAGA_REAL_GAME points at it.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from projectz import cli, config, doctor, gamefs, launch, plan
+from kalaga import cli, config, doctor, gamefs, launch, plan
 
 GAME_CONFIG = """\ufeff<?xml version="1.0" encoding="utf-8"?>
 <Game configVersion="1">
@@ -195,7 +195,7 @@ class ManifestTests(TempCase):
 
 class ConfigTests(TempCase):
     def test_loads_values_and_defaults(self) -> None:
-        path = self.root / "projectz.toml"
+        path = self.root / "kalaga.toml"
         path.write_text(
             "[game]\n"
             f"dir = '{self.root / 'game'}'\n"
@@ -380,7 +380,7 @@ class LaunchTests(TempCase):
 
 class CliTests(TempCase):
     def _config(self, game: Path) -> Path:
-        path = self.root / "projectz.toml"
+        path = self.root / "kalaga.toml"
         path.write_text(
             f"[game]\ndir = '{game}'\nmanifest = ''\n[runtime]\nvictory_dir = '{self.root / 'nope'}'\n",
             encoding="utf-8",
@@ -440,13 +440,13 @@ class CliTests(TempCase):
 
 
 @unittest.skipUnless(
-    os.environ.get("PROJECTZ_REAL_GAME"),
-    "set PROJECTZ_REAL_GAME to a real dump to run the integration check",
+    os.environ.get("KALAGA_REAL_GAME"),
+    "set KALAGA_REAL_GAME to a real dump to run the integration check",
 )
 class RealDumpTests(unittest.TestCase):
     def test_real_dump_validates(self) -> None:
         scan = gamefs.scan(
-            os.environ["PROJECTZ_REAL_GAME"],
+            os.environ["KALAGA_REAL_GAME"],
             expected_title_id="7952987A",
             expected_version="1.0.2.1",
         )

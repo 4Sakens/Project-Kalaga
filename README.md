@@ -1,4 +1,4 @@
-# Project Z-GTA
+# Project Kalaga
 
 **One repository for running Xbox Series X|S game files on Windows — natively,
 without CPU emulation.** The title's own x86-64 code runs in our process; the
@@ -14,7 +14,7 @@ The project consolidates four efforts:
 | **VIctory** | `D:\VIctory` (GTA VI fork `fxceless/victory-gta6` @ `1684989`; base upstream `Marvisak/VIctory`) | GTA VI–specific layer in Rust: formats, hooks, build identities, shader pipeline, CLI. |
 | **FiveStar Recomp** | `fivestar/` (submodule) | GTA VI port in C#/.NET: formats, shader translation, loader, graphics, asset extraction. |
 | **Xbox2Windows** | `xbox2windows/` (submodule) | Static-recompilation research in C++/CMake and Python; source-built CPU/GPU fixtures. |
-| **Project-Z tooling** | `projectz/` (this repo) | Discovery, validation, readiness, build, dependency staging, launch and diagnostics — the glue that turns the four layers into a repeatable pipeline. |
+| **Project Kalaga tooling** | `kalaga/` (this repo) | Discovery, validation, readiness, build, dependency staging, launch and diagnostics — the glue that turns the four layers into a repeatable pipeline. |
 
 ## Status (2026-11-24, measured on this machine)
 
@@ -73,14 +73,14 @@ evidence and a diagnostic report.
 ## Quick start
 
 ```powershell
-copy projectz.example.toml projectz.toml     # set your paths
-python -m projectz doctor                    # hardware + toolchain
-python -m projectz validate                  # dump identity, archives, manifest
-python -m projectz plan                      # what can run, and what blocks it
-python -m projectz build                     # builds the selected runtime
-python -m projectz launch --dry-run          # exact command + env
-python -m projectz launch                    # run the title
-python -m projectz report --out report.json  # one JSON with everything
+copy kalaga.example.toml kalaga.toml     # set your paths
+python -m kalaga doctor                    # hardware + toolchain
+python -m kalaga validate                  # dump identity, archives, manifest
+python -m kalaga plan                      # what can run, and what blocks it
+python -m kalaga build                     # builds the selected runtime
+python -m kalaga launch --dry-run          # exact command + env
+python -m kalaga launch                    # run the title
+python -m kalaga report --out report.json  # one JSON with everything
 ```
 
 No Visual Studio? Set a GNU toolchain and a mingw-w64 `bin` folder:
@@ -110,15 +110,18 @@ code, [docs/architecture.md](docs/architecture.md) for how the layers fit, and
 [docs/bvh-test.md](docs/bvh-test.md) for the BVH builder/trace test,
 [docs/shadow-mask-test.md](docs/shadow-mask-test.md) for the five-program
 light-path test, [docs/light-passes.md](docs/light-passes.md) for the pass map
-and repository updates, and [docs/upstream-review.md](docs/upstream-review.md)
-for the upstream/PR review.
+and repository updates, [docs/upstream-review.md](docs/upstream-review.md)
+for the upstream/PR review, [docs/pc-test.md](docs/pc-test.md) for PC controls
+(mouse-look, Esc), the loading-video fix and the frame-rate switches, and
+[docs/graphics-plan.md](docs/graphics-plan.md) for the plan to fix the
+lighting and graphics.
 
 ## Repository layout
 
 ```text
-ZZ-box/                       (github.com/4Sakens/Project-Z-GTA)
-├── projectz/                 integration toolkit (Python, stdlib only)
-├── tests/                    33 unit tests; PROJECTZ_REAL_GAME adds the real-dump check
+ZZ-box/                       (github.com/4Sakens/Project-Kalaga)
+├── kalaga/                   integration toolkit (Python, stdlib only)
+├── tests/                    33 unit tests; KALAGA_REAL_GAME adds the real-dump check
 ├── docs/
 │   ├── launcher.md           commands, configuration, troubleshooting
 │   ├── architecture.md       how the pipeline composes the runtimes
@@ -130,18 +133,20 @@ ZZ-box/                       (github.com/4Sakens/Project-Z-GTA)
 │   ├── shadow-mask-test.md   five light-path programs; exact-mask + cell result
 │   ├── light-passes.md       light-pass map and 2026-11-24 repository check
 │   ├── upstream-review.md    forks, PRs/issues, trial integration, licences
+│   ├── pc-test.md            mouse-look, Esc, loading-video fix, fps switches
+│   ├── graphics-plan.md      ordered plan for the black shadows and graphics
 │   └── integration.md        the four-effort merge plan
 ├── fivestar/                 FiveStar Recomp (submodule)
 ├── xbox2windows/             Xbox2Windows (submodule)
 ├── patches/                  fork patches applied to D:\VIctory
-├── pyproject.toml            projectz packaging
-├── projectz.example.toml     configuration template
+├── pyproject.toml            kalaga packaging
+├── kalaga.example.toml     configuration template
 └── Cargo.toml                Rust workspace stub for the grafted crates
 ```
 
 The Rust sources of XCL and VIctory stay in their own checkouts for now; the
 root `Cargo.toml` declares them as path dependencies so a combined build can be
-added without moving code. `projectz.toml` (machine paths) and `logs/` are
+added without moving code. `kalaga.toml` (machine paths) and `logs/` are
 git-ignored.
 
 ## Requirements
@@ -152,13 +157,13 @@ git-ignored.
   or a mingw-w64 toolchain for the GNU target.
 - `dxcompiler.dll` + `dxil.dll` (Windows SDK, or Microsoft's standalone
   [DirectX Shader Compiler](https://github.com/microsoft/DirectXShaderCompiler)
-  release) — `projectz launch` stages them next to the executable.
+  release) — `kalaga launch` stages them next to the executable.
 - Your own copy of the game files. Nothing proprietary is stored here.
 
 ## Licensing
 
 XCL is GPL-2.0-only; FiveStar and VIctory are GPL-3.0; Xbox2Windows is MIT; the
-Project-Z tooling is GPL-2.0-or-later. Combining them into one distributed build
+Project Kalaga tooling is GPL-2.0-or-later. Combining them into one distributed build
 needs a licence decision — see "Open decisions" in
 [docs/integration.md](docs/integration.md).
 

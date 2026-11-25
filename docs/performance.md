@@ -113,7 +113,7 @@ $env:VICTORY_CARD_BUFFERS_MIN_MB = '1'
 $env:VICTORY_CARD_BUFFERS_MB = '1024'
 $env:VICTORY_JOIN_COPIES = '1'
 $env:VICTORY_CARD_REHASH_RUNS = '1'
-python -m projectz launch --config logs/release-config.toml --timeout 900
+python -m kalaga launch --config logs/release-config.toml --timeout 900
 ```
 
 ### Quality profile at native resolution (2026-11-24)

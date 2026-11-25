@@ -1,4 +1,4 @@
-# ZZ-box — combined Xbox-on-Windows runtime + GTA VI port
+# Project Kalaga — combined Xbox-on-Windows runtime + GTA VI port
 
 # Rust / build output
 /target/
@@ -44,7 +44,8 @@ cmake-build-*/
 Thumbs.db
 desktop.ini
 
-# Project-Z local state (machine-specific paths, logs, reports)
+# Project Kalaga local state (machine-specific paths, logs, reports)
+/kalaga.toml
 /projectz.toml
 /logs/
 /reports/

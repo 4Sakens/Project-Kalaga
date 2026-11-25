@@ -17,7 +17,7 @@ worktree at the same source commit.
 - Stable: `D:\VIctory` stayed at `1684989` with only the uncommitted
   `crates/victory-gpu/src/frame.rs` opening patch; its 17:24 binary was not
   rebuilt or replaced.
-- Launch: `projectz` with `logs/bvh-config.toml` pointing
+- Launch: `kalaga` with `logs/bvh-config.toml` pointing
   `runtime.victory_dir` at the worktree, the stable graphics settings
   (`gamma=15`, `vSync=2`, FSR off, AF off), `VICTORY_DISPLAY_MODE=640x360`,
   the AMD skip list, `VICTORY_SHADER_LOOP_LIMIT=256`, relay/in-place/wide-back
@@ -77,7 +77,7 @@ does not produce a usable lit frame:
 | `+ BVH_QUARANTINE=1` | 53 pipelines | **no** | not restored; black foreground, blue cast | no, ~0 fps |
 
 This is a title-side crash in the builder path, not a GPU device removal. It
-does not justify enabling the builder in `projectz.toml`. The next useful
+does not justify enabling the builder in `kalaga.toml`. The next useful
 step is to isolate which builder pipeline writes the bad data, with
 `VICTORY_BVH_QUARANTINE=1` as the safe baseline; the stable build stays as-is
 until that is fixed.

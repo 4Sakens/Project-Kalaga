@@ -15,9 +15,12 @@ exactly. The tiny transpose program still needs the approximate 16-bit half-sum
 relaxation; without it the prologue stays black even though the other four
 translate. With exact masks plus that one relaxation, all five translate, the
 prologue is clearly lit, there are 0 device removals, and gameplay is 3.6 fps.
-The earlier both-relaxations run also showed partial cell light. The cell was
-not re-captured with the new exact-mask combination, so this is a prologue
-result plus the earlier cell result, not a full indoor re-test.
+A follow-up cell capture with the same combination (run D) shows the cell and
+cell block still essentially unlit: lamp panels glow but light nothing around
+them, and faces and clothing are black. The earlier “partial cell light” claim
+for run A had no supporting image (its cited captures are the desktop and the
+PROLOGUE card), so it is withdrawn. The gain is a prologue/sunlit-exterior
+result, not indoor light.
 
 ## The five programs, by their container names
 
@@ -80,9 +83,10 @@ All runs used the normal AMD skip list, `VICTORY_SHADER_LOOP_LIMIT=256`,
 
 | Run | Tree / commit | Mask / half-sum flags | Five translation | Visible result |
 |---|---|---|---|---|
-| A | `shadow-mask-trace` `f9bc747` | `1` / `1` | 5/5 | partial cell light; prologue face lit; 3.7–4.0 fps; 0 removals |
+| A | `shadow-mask-trace` `f9bc747` | `1` / `1` | 5/5 | prologue doorway lit; 3.7–4.0 fps; 0 removals; no cell capture |
 | B | `shadow-mask-upstream` `fbf18a1` (upstream `90228a7` cherry-picked) | `0` / `0` | 4/5; `b22a…` still fails | prologue face black; 1.8 fps at capture |
 | C | `shadow-mask-upstream` `fbf18a1` | `0` / `1` | 5/5 | prologue hair, yard and background prisoners lit; 3.6 fps; 0 removals |
+| D | `shadow-mask-upstream` `fbf18a1` | `0` / `1` | 5/5 | cell and cell block: lamps glow, walls/faces/clothing near-black; 3.2–5.2 fps; 0 removals |
 
 Run B isolates the cause: exact masks are not enough. `b22a…` — a generic
 matrix utility by name — gates the visible light. Run C is the better
@@ -93,15 +97,19 @@ Evidence:
 
 - B, black: `logs/shadow-upstream.png`
 - C, lit: `logs/shadow-upstream-half-2.png`
-- A, earlier cell: `logs/shadow-cell-4.png`, `logs/shadow-cell-6.png`
+- D, cell: `logs/cell-exact-door.png`, `logs/cell-exact-block.png`,
+  `logs/cell-exact-room.png`, `logs/cell-exact-corridor.png`; all frames in
+  `logs/cell-exact/`
+- D log: `logs/victory-20261124-191102.log`
 - C log: `logs/victory-20261124-184356.log`
 - B log: `logs/victory-20261124-184119.log`
 - A log: `logs/victory-20261124-183039.log`
+- A's former “cell” images (`logs/shadow-cell-*.png`) are desktop captures,
+  the PROLOGUE card, or the doorway shot; none shows the cell.
 
 The C capture is a gameplay angle showing the back of the head and hair, not a
-front-facing face. It shows lit hair, yard and prisoners; it does not prove the
-cell or a front-facing face. The exact-mask + half-sum cell capture is still
-missing.
+front-facing face. Run D covers the cell: see
+[shadow-mask-test.md](shadow-mask-test.md#visual-result).
 
 ## Repository updates checked
 
@@ -168,8 +176,9 @@ has not been merged into stable or pushed.
   (`7d0f14ce44746d7e`, `2fd01fca16993001`, `6b6db9f1a526daeb`) and three on
   first-half interpolation (`8445dcb2b63aa197`, `78f3f2fc53a69531`,
   `38bf0814e721a1b3`). They can drop composite/lighting draws.
-- The exact-mask + half-sum run has no cell capture; the cell claim remains the
-  earlier both-flags result.
+- The exact-mask + half-sum cell capture (run D) shows no indoor lamp fill or
+  bounce; the cause (builder off, skipped resolve variants, the failures
+  above) is untested.
 - `b22a…` needs a dispatch/resource trace to explain why a transpose utility
   gates the light; the half-sum relaxation is not proven exact for every lane
   state.

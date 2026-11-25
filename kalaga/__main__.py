@@ -1,4 +1,4 @@
-"""``python -m projectz`` entry point."""
+"""``python -m kalaga`` entry point."""
 
 from .cli import main
 

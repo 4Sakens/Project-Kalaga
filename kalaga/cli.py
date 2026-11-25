@@ -1,4 +1,4 @@
-"""Command line interface: ``python -m projectz <command>``."""
+"""Command line interface: ``python -m kalaga <command>``."""
 
 from __future__ import annotations
 
@@ -58,7 +58,7 @@ def cmd_locate(args) -> int:
         print(json.dumps(payload, indent=2))
     else:
         if not payload:
-            print(f"no game found under {cfg.game.root} (set game.dir in projectz.toml)")
+            print(f"no game found under {cfg.game.root} (set game.dir in kalaga.toml)")
             return EXIT_INVALID_GAME
         print(util.format_table(
             ["directory", "title", "version", "name"],
@@ -334,14 +334,14 @@ def cmd_report(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--config", help="path to projectz.toml")
+    common.add_argument("--config", help="path to kalaga.toml")
     common.add_argument("--json", action="store_true", help="machine-readable output")
 
     parser = argparse.ArgumentParser(
-        prog="projectz",
+        prog="kalaga",
         description="Locate, validate, plan, build and launch the GTA VI console build on Windows.",
     )
-    parser.add_argument("--config", dest="global_config", help="path to projectz.toml")
+    parser.add_argument("--config", dest="global_config", help="path to kalaga.toml")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("locate", parents=[common], help="find game dumps under the configured root")
