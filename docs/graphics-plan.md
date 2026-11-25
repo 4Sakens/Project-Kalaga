@@ -44,44 +44,70 @@ Each step is tested the same way: a native run past the prologue, the frame
 line (fps, dropped draws, device removals), and before/after captures of the
 same shots (doorway, cell block, common room).
 
-### 1. Bring back the transpose program — small
+Revised 2026-11-25 after the survey in [related-work.md](related-work.md):
+someone else already has the lighting rendering correctly with the builder on
+(fork issue #543, at about 0.3 fps), so the order below follows that path.
 
-Port the opt-in 16-bit half-sum switch (`VICTORY_WAVE_HALF_SUM_ANY=1`) from
-the experimental branch (`shadow-mask-trace` `f9bc747`) to the test copy. It is
-not in the fork's `main`. The fork's `main` already has the exact lane-mask fix
-and the permlane lowering from that branch. This makes all five light-path
-programs translate and returns 14–28 draws a frame. On the experimental tree
-that combination lit the prologue hair, yard and prisoners with 0 removals
-(run C). Expected effect indoors: small. The cell stayed dark in run D.
+### 1. Take PR #203 — done (partly kept)
 
-### 2. Re-test the AMD skip list on this card — medium
+PR #203 (`triippywhale:fix/shader-gaps`, saved as
+[`patches/0004-pr203-shader-gaps.patch`](../patches/0004-pr203-shader-gaps.patch)
+with its author) translates the 16-bit wave sum with lanes gone (`b22a…`),
+the descriptor size/format reads (`ceb5…`) and the pixel “descriptor read
+only as data” programs. It replaced both the old step 1 (porting the
+approximate half-sum switch) and the old step 3. It was tested on an
+RX 7900 XT, the same architecture as this card, and is part of the stack that
+validates 98.1 % of the retail shader pack (#471).
 
-The 43 skips come from an RX 9060 XT / 9070 XT report against an older
-translator, where those programs crashed AMD's shader compiler. They have not
-been re-tested on the RX 7600 with the current translator. Un-skip them in
-halves, then quarters, to find which still crash. Every
-`CS_RaytracingResolve` variant brought back is part of how the traced light
-is composited onto the screen. This is the step most likely to give a visible
-indoor change. Risk: a bad one hangs or removes the GPU, so each group gets
-its own run with saves copied.
+**Result** (test copy, native, `logs/victory-20261124-211251.log` and the A/B
+run after it):
 
-### 3. Translate “descriptor read as data” — medium to large
+- All five programs translate. The log has no “does not translate” lines at
+  all. `victory-shader` tests: 215 passed, 3 ignored.
+- Dropped draws fell from about 380 to about 345 per frame. Gameplay is still
+  3.8–4.3 fps, with 0 device removals.
+- **The compute fixes light the room.** At the cell doorway, the walls beside
+  the door are now shaded by the sun instead of black. The area left of the
+  door, black before, shows the outside horizon. Whether that is a real
+  opening or a wall that no longer draws is not confirmed yet.
+- **The three pixel programs light the jacket but corrupt it.** With them on,
+  the jacket shows its colours under light, with noisy red/blue patches over
+  it. With them skipped, the jacket is dark and clean.
+  `logs/pr203-ab.png` is the side-by-side.
+- Kept: PR #203 in the binary, with `7d0f14ce44746d7e`, `2fd01fca16993001`
+  and `6b6db9f1a526daeb` added to the test config's skip list. Next for these:
+  find which of the three makes the patches. The PR's own notes call its
+  8-dword case (taking an unused descriptor as a 2D texture) a shortcut.
 
-Teach the shader translator the case where a program reads a texture or
-buffer descriptor's raw words: its address, format or size. This covers the
-three deferred pixel programs and `ceb5…`. Missing deferred programs mean
-missing or flat-coloured surfaces in the composite. Check XCL and upstream
-VIctory for an existing implementation before writing one; XCL has recent
-descriptor and per-lane work.
+### 2. Replace the AMD skip list — medium
 
-### 4. Make the BVH builder run — large
+The 43 skips work around AMD's shader compiler crashing
+(`amdxc64.dll+0x85fd0f`). Fork issue #422 reports that `VICTORY_SHADER_OPT=59`
+(fewer clean-up passes in the emitted shaders) clears that crash on RDNA4.
+Test it on the RX 7600 with the skip list removed. If it holds, the 41
+`CS_RaytracingResolve` variants (the composite of the traced light) and the 2
+meshlet-culling programs come back. Fallback: un-skip in halves to find the
+real offenders. Each run uses copied saves.
 
-Without a dynamic BVH, moving objects and characters are not in the
-structures the light is traced against. The builder needs its last refused
-pipelines (programs that still ask for 64-lane waves on this 32-lane GPU) to
-run. Then it can be enabled without quarantine and checked for the earlier
-crash (bad bounds written into title memory). This is the largest and least
-certain step.
+### 3. Turn the builder on — medium
+
+This card (RDNA3) runs 64-lane waves, so all 53 builder pipelines already get
+host pipelines ([bvh-test.md](bvh-test.md)). Earlier the builder crashed the
+title without quarantine, and showed no usable light with it. That was before
+the light-path programs translated. Now: take the BVH absent-child sort fix
+(PR #230 / #414, issue #173), run `VICTORY_BVH_BUILDER=1
+VICTORY_BVH_QUARANTINE=1`, and compare against #543's description. Expected:
+correct-looking light at well under 1 fps.
+
+### 4. Make the builder affordable — large, open
+
+With the builder on, every builder write invalidates host copies, and the
+runtime re-copies 43–87 GB of title memory a frame (#543, #284). That is the
+real wall between “lit but 0 fps” and “lit and playable”. Candidates: a
+dirty-page mask instead of whole-range refreshes (#284), keeping builder
+memory on the GPU instead of round-tripping it (SwavyJayden's fork), parallel
+and adaptive copy refresh (Emiriley's fork). Then the crash without quarantine
+(empty-box bounds, #16; the `s_round_mode` f16 fix in SaymonMaster14's fork).
 
 ### 5. Optional stopgap: shadow fill — small, cosmetic
 
@@ -93,10 +119,10 @@ Global gamma was already ruled out because it washes out the sunlit areas
 
 ## What to expect
 
-- Steps 1–2 are days of testing and can show a difference indoors.
-- Step 3 is translator work: days to a couple of weeks.
-- Step 4 decides whether full ray-traced lighting works. It is open-ended,
-  and nothing here guarantees it.
+- Steps 1–2 are days of testing. Step 3 should show correct light, but at a
+  frame rate that is not playable.
+- Step 4 decides whether lit play is possible. Nobody has solved it yet. It is
+  open-ended, and nothing here guarantees it.
 - Frame rate (about 4 fps in the world) is a separate wall; see
   [performance.md](performance.md). Restoring the lighting will cost GPU time,
   not save it. Upstream noted about 40 ms a frame for the irradiance

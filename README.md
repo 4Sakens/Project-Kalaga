@@ -114,7 +114,8 @@ and repository updates, [docs/upstream-review.md](docs/upstream-review.md)
 for the upstream/PR review, [docs/pc-test.md](docs/pc-test.md) for PC controls
 (mouse-look, Esc), the loading-video fix and the frame-rate switches, and
 [docs/graphics-plan.md](docs/graphics-plan.md) for the plan to fix the
-lighting and graphics.
+lighting and graphics, and [docs/related-work.md](docs/related-work.md) for
+what the other projects and forks have working.
 
 ## Repository layout
 
@@ -135,6 +136,7 @@ ZZ-box/                       (github.com/4Sakens/Project-Kalaga)
 │   ├── upstream-review.md    forks, PRs/issues, trial integration, licences
 │   ├── pc-test.md            mouse-look, Esc, loading-video fix, fps switches
 │   ├── graphics-plan.md      ordered plan for the black shadows and graphics
+│   ├── related-work.md       survey of the other projects and forks
 │   └── integration.md        the four-effort merge plan
 ├── fivestar/                 FiveStar Recomp (submodule)
 ├── xbox2windows/             Xbox2Windows (submodule)
