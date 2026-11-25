@@ -113,18 +113,61 @@ Results on the RX 7600 (test copy with PR #203, native):
   split the two causes. That run (`logs/step2-resolves-config.toml`) was cut
   short when another session started a game. The list of the twelve is in
   `logs/step2-bound12.txt`.
-- **Kept for now:** the full skip list in the test config. Playable speed
-  matters more until the culling question is answered.
+- **Update (user priority: looks over speed):** the builder-on runs in step 3
+  re-enable the ten resolve variants and keep only the two culling programs
+  skipped. None of those runs crashed in AMD's compiler.
 
-### 3. Turn the builder on — medium
+### 3. Turn the builder on — done; lit, slow, stable with quarantine
 
-This card (RDNA3) runs 64-lane waves, so all 53 builder pipelines already get
-host pipelines ([bvh-test.md](bvh-test.md)). Earlier the builder crashed the
-title without quarantine, and showed no usable light with it. That was before
-the light-path programs translated. Now: take the BVH absent-child sort fix
-(PR #230 / #414, issue #173), run `VICTORY_BVH_BUILDER=1
-VICTORY_BVH_QUARANTINE=1`, and compare against #543's description. Expected:
-correct-looking light at well under 1 fps.
+The user's priority is now correct lighting, not speed. All runs: native, OPT
+59, the ten resolve variants on, skipped only the 3 jacket pixel programs and
+the 2 meshlet-culling programs, `VICTORY_BVH_BUILDER=1`. Builds: step 1
+(`D:\VIctory-pc`) and variants of the step 3 branch (`D:\VIctory-step3`, see
+[step3-prep.md](step3-prep.md)).
+
+| Build | Quarantine | Result | Log |
+|---|---|---|---|
+| step 3, all four patches | yes | crash 4 s after the builder starts (title null write, `+0x23cf683`) | `victory-20261124-220909.log` |
+| step 1 (no BVH patches) | yes | lit cutscene; crash after ~5 min (title read of `0xffff…`) | `victory-20261124-221137.log` |
+| step 3 minus “builder-only writes by address” | no | crash 26 s in, same `+0x23cf683` | `victory-20261124-221817.log` |
+| step 1 | no | crash 14 s in; the crash in fork issue #16 | `victory-20261124-222024.log` |
+| **step 1 + BVH absent-child sort fix** (also without the `s_round_mode` patch) | yes | **no crash in 25 min**; reached gameplay; 0.3–0.5 fps, 0 dropped draws, 0 device removals | `victory-20261124-222232.log` |
+
+What the runs show:
+
+- **The `s_round_mode` patch (SaymonMaster14) causes the early crash** on
+  this tree: every build with it crashed within 26 s at the same title
+  address. The subagent had to re-apply it by hand (its cherry-pick dropped
+  helpers we need), so the port may be at fault, not the idea. Left out.
+- **The BVH absent-child sort fix (#414 + #217's test) is what keeps the
+  quarantined builder alive.** Saved as
+  [`patches/0005-bvh-absent-child-sort.patch`](../patches/0005-bvh-absent-child-sort.patch)
+  with its authors.
+- **Without quarantine the builder still crashes the title in 14–26 s**, as
+  every other tester reports (#16). Quarantine (builder stores kept out of
+  title memory) is what makes it run.
+
+What the picture looks like with the builder on:
+
+- **Opening cutscene:** Lucia's face is fully lit and detailed, for the first
+  time in any run here (`logs/quality-pc/007-t214.png`). The cell interior
+  shows sunlight falling across the bunk and frame (`004-t123.png`). Some
+  other characters are still solid black, and there is sparkle noise around
+  the lamps.
+- **Cell, gameplay:** the bunk beds and metal frames are visible and catch the
+  light, where they were lost in black before (`logs/builder-compare.png`,
+  builder off vs on; the camera angle differs slightly). A fine mesh-like
+  noise covers the shaded side of the face. That is probably the traced light
+  before the title's denoise pass resolves it. To check.
+- Speed: 0.3–0.5 fps (2.2–3.3 s a frame), about 6,700 draws, 0 dropped. The
+  CPU is busy and the GPU mostly idle: the runtime re-copies title memory the
+  builder changes (step 4).
+
+Next for correctness: (1) why some characters stay black with the builder on;
+(2) the mesh-like noise on faces (denoise / temporal accumulation, which may
+need several frames that 0.3 fps makes look worse); (3) the two meshlet-culling
+programs (ceiling) and the three jacket pixel programs, now that speed does not
+matter; (4) the crash without quarantine.
 
 ### 4. Make the builder affordable — large, open
 

@@ -1,0 +1,163 @@
+From 9c91da7ab185572d5c9fe5fb0b07094213d3f9c1 Mon Sep 17 00:00:00 2001
+From: devan <devandradetk@gmail.com>
+Date: Tue, 24 Nov 2026 18:26:45 -0600
+Subject: [PATCH 1/2] Fix BVH sorted box hits: absent child can sort before a
+ real hit (#173)
+
+In bvh::boxes and the matching DXIL emitter (emit/intersect.rs), an
+absent child (NONE) could get a finite sort key when its stored bounds
+pass the slab test, letting it sort ahead of a valid hit. Give absent
+children the same infinite distance as misses: in the CPU reference guard
+the hit on children[n] != NONE, and in the emitter AND an unsigned
+child < NONE (i.e. present) into the hit mask.
+
+Adds a regression test (sorted_boxes_put_absent_children_after_real_hits)
+covering the issue's reproducer: ray +Z extent 10, slot 0 absent with
+intersecting bounds, slot 1 present; sorted result is [8, NONE, NONE,
+NONE] and unsorted keeps slot order. Synthetic cases only; no game data.
+
+Verified: victory-shader lib tests pass, clippy clean.
+(cherry picked from commit 11f80604ad562bd52c99ef44470e0e16cc8aab6e)
+---
+ crates/victory-shader/src/bvh.rs            | 20 ++++++++++++++++++--
+ crates/victory-shader/src/emit/intersect.rs |  4 ++++
+ 2 files changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/crates/victory-shader/src/bvh.rs b/crates/victory-shader/src/bvh.rs
+index 9f54001..ab1d0cc 100644
+--- a/crates/victory-shader/src/bvh.rs
++++ b/crates/victory-shader/src/bvh.rs
+@@ -196,8 +196,10 @@ pub fn boxes(children: &[u32; 4], boxes: &[[f32; 6]; 4], ray: &Ray, sort: bool)
+         }
+         let enter = near[0].max(near[1]).max(near[2]);
+         let leave = far[0].min(far[1]).min(far[2]);
+-        // A box whose minimum x is NaN is switched off.
+-        if !b[0].is_nan() && leave >= enter.max(0.0) && enter < ray.extent {
++        // A box whose minimum x is NaN is switched off, as is an absent
++        // child (NONE): an absent child must never get a finite sort key,
++        // or it can sort ahead of a real hit.
++        if children[n] != NONE && !b[0].is_nan() && leave >= enter.max(0.0) && enter < ray.extent {
+             ids[n] = children[n];
+             distances[n] = enter;
+         }
+@@ -427,6 +429,20 @@ pub(crate) mod tests {
+         assert_eq!(intersect(&node, 5, &back, true), [NONE; 4]);
+     }
+ 
++    #[test]
++    fn sorted_boxes_put_absent_children_after_real_hits() {
++        let bounds = [
++            [-1.0, -1.0, 1.0, 1.0, 1.0, 2.0],
++            [-1.0, -1.0, 3.0, 1.0, 1.0, 4.0],
++            [0.0; 6],
++            [0.0; 6],
++        ];
++        let ids = [NONE, 8, NONE, NONE];
++        let ray = Ray::new([0.0; 3], [0.0, 0.0, 1.0], 10.0);
++        assert_eq!(boxes(&ids, &bounds, &ray, true), [8, NONE, NONE, NONE]);
++        assert_eq!(boxes(&ids, &bounds, &ray, false), ids);
++    }
++
+     #[test]
+     fn a_ray_starting_inside_a_box_enters_it_at_its_origin() {
+         let node = box32(
+diff --git a/crates/victory-shader/src/emit/intersect.rs b/crates/victory-shader/src/emit/intersect.rs
+index 78a1d99..a97a08d 100644
+--- a/crates/victory-shader/src/emit/intersect.rs
++++ b/crates/victory-shader/src/emit/intersect.rs
+@@ -403,6 +403,10 @@ impl<'a> Lower<'a> {
+             let on = self.s.m.bin(c, Bin::Xor, off, on);
+             let hit = self.s.m.bin(c, Bin::And, through, before);
+             let hit = self.s.m.bin(c, Bin::And, hit, on);
++            // An absent child (NONE) must never receive a finite sort key,
++            // even if its stored bounds pass the slab test.
++            let present = self.s.m.cmp(c, pred::IULT, children[n], none);
++            let hit = self.s.m.bin(c, Bin::And, hit, present);
+             ids[n] = self.s.m.select(c, hit, children[n], none);
+             distances[n] = self.s.m.select(c, hit, enter, infinity);
+         }
+-- 
+2.55.0.windows.5
+
+
+From 27cb2310310187d1570d069f87ca0b319751616e Mon Sep 17 00:00:00 2001
+From: Flyander <48117641+Flyander@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 23:38:42 +0100
+Subject: [PATCH 2/2] Shader tests: a sorted BVH node with an absent child, on
+ the card (test of #217)
+
+From Flyander's fxceless/victory-fork PR #217 (f44603055d), only its card
+test: the code change is the same as #414's, which is already applied.
+
+(cherry picked from commit f44603055d242ee7dd971634483a05a12ccf160f)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .../src/emit/intersect_tests.rs               | 51 +++++++++++++++++++
+ 1 file changed, 51 insertions(+)
+
+diff --git a/crates/victory-shader/src/emit/intersect_tests.rs b/crates/victory-shader/src/emit/intersect_tests.rs
+index 0266579..33fe586 100644
+--- a/crates/victory-shader/src/emit/intersect_tests.rs
++++ b/crates/victory-shader/src/emit/intersect_tests.rs
+@@ -585,6 +585,57 @@ fn run(wide: bool, descriptor: Descriptor, pointers: u64, sort: bool) {
+     assert!(ran > 0, "no SM 6.6 device available");
+ }
+ 
++#[test]
++fn absent_child_sorted_box_gpu_matches_reference() {
++    let ids = [bvh::NONE, 8, bvh::NONE, bvh::NONE];
++    let boxes = [
++        [-1.0, -1.0, 1.0, 1.0, 1.0, 2.0],
++        [-1.0, -1.0, 3.0, 1.0, 1.0, 4.0],
++        [0.0; 6],
++        [0.0; 6],
++    ];
++    let mut scene = Scene::new();
++    let node = scene.add(nodes::box32(ids, boxes), 32);
++    let case = Some((node, 5, Ray::new([0.0; 3], [0.0, 0.0, 1.0], 10.0)));
++    let want = expected(&scene, &case, true);
++    assert_eq!(want, [8, bvh::NONE, bvh::NONE, bvh::NONE]);
++    let (shader, _) = build(true, Descriptor::Table).unwrap();
++    let _one = super::valu_tests::ONE_AT_A_TIME
++        .lock()
++        .unwrap_or_else(|e| e.into_inner());
++    let data = buffer(&scene, &[case], u64::from(NODES));
++    let mut ran = 0;
++    for (label, warp) in [("hardware", false), ("warp", true)] {
++        let Ok(host) = Host::new(warp) else {
++            eprintln!("no SM 6.6 {label} device; skipped");
++            continue;
++        };
++        let (root, pso) = host.compute_pipeline(&shader).unwrap();
++        let out = host
++            .dispatch(
++                &root,
++                &pso,
++                &Dispatch {
++                    roots: vec![(0, Root::Constants(vec![0; 5]))],
++                    views: &[
++                        View::Buffer {
++                            data: &data,
++                            stride: Stride::Raw,
++                        },
++                        View::RawUav(4 * THREADS),
++                    ],
++                    samplers: &[],
++                    groups: [1, 1, 1],
++                },
++            )
++            .unwrap();
++        eprintln!("{label} BVH sorted output: {:?}", &out[0][..4]);
++        assert_eq!(&out[0][..4], want, "{label}");
++        ran += 1;
++    }
++    assert!(ran > 0, "no SM 6.6 device available");
++}
++
+ #[test]
+ fn the_64_bit_node_test_in_a_host_buffer_matches_the_reference_on_the_card() {
+     // Pointers count from the buffer's start.
+-- 
+2.55.0.windows.5
+
