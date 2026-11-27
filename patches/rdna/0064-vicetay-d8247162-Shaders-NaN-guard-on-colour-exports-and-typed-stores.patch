@@ -1,0 +1,118 @@
+From 9e2fc40ee44919a160155e312e443ee93a6acd1a Mon Sep 17 00:00:00 2001
+From: PastiiJay <34892884+PastiiJay@users.noreply.github.com>
+Date: Tue, 24 Nov 2026 21:23:25 +0100
+Subject: [PATCH] Shaders: NaN guard on colour exports and typed stores
+
+A float a pixel program exports to a colour target gets NaN as 0 and an
+infinity as +-65504; typed image and buffer stores get the same for the NaN
+the GPU makes (0x7FC00000) and infinities, so integer bits pass. One bad pixel
+no longer stays in a history blended into every frame. VICTORY_NAN_GUARD=0
+turns it off; part of the shader cache fingerprint.
+
+(cherry picked from commit 0e5f4b2ad23e85bbfaafdcac3bb595a20d0ebc28)
+(cherry picked from commit d82471623580d6c718d91cd8d9247f80dbdf58da)
+---
+ crates/victory-gpu/src/shader_cache.rs  |  1 +
+ crates/victory-shader/src/emit/lower.rs | 44 +++++++++++++++++++++++--
+ 2 files changed, 43 insertions(+), 2 deletions(-)
+
+diff --git a/crates/victory-gpu/src/shader_cache.rs b/crates/victory-gpu/src/shader_cache.rs
+index 1f5fc1fd..80a6b346 100644
+--- a/crates/victory-gpu/src/shader_cache.rs
++++ b/crates/victory-gpu/src/shader_cache.rs
+@@ -126,6 +126,7 @@ fn build() -> [u8; BUILD_LEN] {
+             "VICTORY_MESH_OUTPUT_STRICT",
+             "VICTORY_BVH_FENCES",
+             "VICTORY_BVH_BOUNDS",
++            "VICTORY_NAN_GUARD",
+         ] {
+             bytes.extend_from_slice(name.as_bytes());
+             bytes.push(b'=');
+diff --git a/crates/victory-shader/src/emit/lower.rs b/crates/victory-shader/src/emit/lower.rs
+index 32afbbb7..a7dc28f9 100644
+--- a/crates/victory-shader/src/emit/lower.rs
++++ b/crates/victory-shader/src/emit/lower.rs
+@@ -4695,6 +4695,40 @@ impl<'a> Lower<'a> {
+         self.s.m.cast(c, Cast::Trunc, hi, self.s.t.i32)
+     }
+ 
++    /// `VICTORY_NAN_GUARD` (on unless `0`): a float a pixel program exports to a colour
++    /// target, or a store writes to a typed image or buffer, with NaN made 0 and an infinity
++    /// ±65504, so one bad pixel does not stay in a history the title blends into each frame.
++    /// `strict` (float targets): every NaN. Otherwise only the NaNs the GPU makes (0x7FC00000,
++    /// either sign) and infinities: a typed store may carry an integer's bits, and all-ones or
++    /// other NaN patterns are common integers.
++    // shortcut: raw buffer stores are left as they are (no type to go by).
++    fn nan_guard(&mut self, f: V, strict: bool) -> V {
++        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++        if !*ON.get_or_init(|| std::env::var_os("VICTORY_NAN_GUARD").is_none_or(|v| v != "0")) {
++            return f;
++        }
++        let c = self.cur;
++        let bits = self.as_int(f);
++        let mag = self.s.m.i32(0x7FFF_FFFF);
++        let abs = self.s.m.bin(c, Bin::And, bits, mag);
++        let inf_bits = self.s.m.i32(0x7F80_0000);
++        let nan = if strict {
++            self.s.m.cmp(c, pred::IUGT, abs, inf_bits)
++        } else {
++            let quiet = self.s.m.i32(0x7FC0_0000);
++            self.s.m.cmp(c, pred::EQ, abs, quiet)
++        };
++        let inf = self.s.m.cmp(c, pred::EQ, abs, inf_bits);
++        let sign_bit = self.s.m.i32(0x8000_0000);
++        let sign = self.s.m.bin(c, Bin::And, bits, sign_bit);
++        let big = self.s.m.i32(65504f32.to_bits());
++        let big = self.s.m.bin(c, Bin::Or, sign, big);
++        let zero = self.s.m.i32(0);
++        let r = self.s.m.select(c, inf, big, bits);
++        let r = self.s.m.select(c, nan, zero, r);
++        self.as_float(r)
++    }
++
+     /// `0 × anything = 0`, as in D3D9.
+     fn legacy_mul(&mut self, a: V, b: V) -> V {
+         let c = self.cur;
+@@ -11900,6 +11934,7 @@ impl<'a> Lower<'a> {
+                     self.float_of(v)?
+                 });
+             }
++            let vals: Vec<V> = vals.into_iter().map(|v| self.nan_guard(v, false)).collect();
+             let h = self.handle(site, src, false, props)?;
+             let at = self.begin_guarded(guard);
+             let mut args = vec![h];
+@@ -12877,7 +12912,8 @@ impl<'a> Lower<'a> {
+                 args.push(self.handle(site, src, false, (10 | u, 0x409))?);
+                 args.extend([index.unwrap_or(self.s.m.i32(0)), iu]);
+                 for x in vals {
+-                    args.push(self.as_float(x));
++                    let f = self.as_float(x);
++                    args.push(self.nan_guard(f, false));
+                 }
+                 (69, "bufferStore.f32")
+             } else {
+@@ -13236,9 +13272,12 @@ impl<'a> Lower<'a> {
+                     .op(c, "legacyF16ToF32", Attr::ReadNone, f32t, 131, &[x]);
+                 x = self.as_int(f);
+             }
++            let pixel = self.s.pixel;
+             let el = &mut elements(self, primitive)[id];
+             el.usage |= 1 << col;
+-            let (suffix, x) = match el.comp {
++            let (kind, comp) = (el.kind, el.comp);
++            let target = !mesh && pixel && kind == 16 && comp == 9;
++            let (suffix, x) = match comp {
+                 9 if half.is_some() => (".f32", self.as_float(x)),
+                 9 => {
+                     let f = match self.floats.get(&value) {
+@@ -13249,6 +13288,7 @@ impl<'a> Lower<'a> {
+                 }
+                 _ => (".i32", x),
+             };
++            let x = if target { self.nan_guard(x, true) } else { x };
+             let mut args = vec![
+                 self.s.m.i32(id as u32),
+                 self.s.m.i32(0),
+-- 
+2.43.0
+

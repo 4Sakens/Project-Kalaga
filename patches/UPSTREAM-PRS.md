@@ -227,3 +227,28 @@ asks for. Whether GTA VI's Xbox build ever asks for keyboard or mouse
 readings decides how keyboard button prompts can be had: fed a real keyboard
 and mouse if it does, or its pad button icons swapped if it does not. The
 session summary and `kalaga bug` read the answer from the log.
+
+## Eighth pass: VIctory-NVIDIA, foxhound, Kelvaroq (2026-11-27 evening)
+
+New public projects from the PortWatch tracker: trustno1-coder/VIctory-NVIDIA
+(80% story, ~20 fps, verified; shares history with VIctory-RDNA, ~800 commits
+ours lacks, now based on foxhound), readmet3xt-lab/foxhound (NVIDIA-tuned,
+history squashed to 2 commits: hand ports only), stellarr-studio/kelvaroq
+(its own codebase, 25% story). CGBJ's codec-d/cool_fox went private.
+
+rdna 0064, **vicetay-d8247162 NaN guard** (the "black blobs" fix VIctory-NVIDIA
+describes): a NaN a pixel program exports to a colour target becomes 0 and an
+infinity ±65504, the same for typed stores (only the GPU's own NaN pattern,
+so integer bits pass). One bad pixel no longer spreads through the title's
+history buffers, blur and upscaler into black patches on faces and in the air.
+`VICTORY_NAN_GUARD=0` turns it off; part of the shader cache fingerprint.
+
+Looked at, not taken:
+- **FSR 3 frame generation** (VIctory-NVIDIA 29d8dbf7): runs on their
+  Streamline layer, and without DLSS upscaling (any AMD card) the title stops
+  on a check 5-11 s in, on either console (their issues #272, #308, #331; their
+  df2daafe now refuses it without DLSS). Waits for a cause, and for a PC to
+  test on. AFMF stays the frame generation for the RX 7600.
+- **Open water without dark blocks** (35c15608): the two water light programs
+  go dark only in the wave-wide form a 32-lane host needs. VIctory-RDNA on a
+  Radeon declares their wave size (64) and runs them natively.
