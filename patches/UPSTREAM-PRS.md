@@ -166,14 +166,13 @@ DexNom/VIctory is a fork of Marvisak/VIctory carrying ZSlayerHQ's
 victory-world Radeon line as one squashed import (570a941e, 170 files) plus
 20 commits. Marvisak/VIctory is the original; it diverged from VIctory-RDNA
 at ffe310e (2026-11-24), and many of its fixes are already in RDNA under
-other wording. Both series (rdna 0056-0060, belobug 0050-0054):
+other wording. Both series (rdna 0056-0059, belobug 0050-0053):
 
 | Fix | What it does |
 |---|---|
 | dexnom-76749ce5 wave64 mask from scalar copies | a wave64 mask parked in two SGPRs and restored dword by dword was not recognised: the voxel visibility shader failed to translate |
 | dexnom-ddb73326 sampler chosen by a branch | a phi of two immediate samplers could not be lowered: DexNom counts 40 world shader variants lost (their draws were dropped) |
 | dexnom-921d8d3b interior mips | a streaming texture with only its middle levels mapped counted as absent and stayed black |
-| marvisak-ea488a9f typed UAV formats | every typed unordered view is checked against what the host can store (a device removal on some cards) |
 | marvisak-78ed12eb null CBV | a null constant buffer description cleared nothing, so the slot kept another buffer's constants |
 
 Already in RDNA: integer-target blending (`host_blend`), the base-2 LOD
@@ -187,4 +186,5 @@ Marvisak 0736f8b3 (Series S UI planes composited, 12 conflicts), 61bfc773
 (placed unordered texture views), 842b0cb7 (depth bounds reach the host),
 315cea18 (barrier start states): large conflicts. 4a53da72 fixes a bug in
 discard handling that RDNA does not have. 77fd8195 (cube denormals) needs
-an ftz helper RDNA lacks. e53474cd is an NVIDIA-only device removal.
+an ftz helper RDNA lacks. e53474cd is an NVIDIA-only device removal. ea488a9f (typed UAV format
+check) applies as text but needs helpers neither tree has (CI caught it).
