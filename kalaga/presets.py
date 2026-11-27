@@ -227,6 +227,13 @@ PRESETS: dict[str, Preset] = {
             env={**_RDNA_COMMON, **_RDNA_FAST, **_SERIES_X_1080P_BALANCED, **_EIGHT_GB_SERIES_X},
         ),
         Preset(
+            name="rx7600-rdna-6core",
+            summary="rx7600-rdna with list/compare pools sized for 6 cores / 12 threads (experiment: the CPU is the wall)",
+            checkout="rdna",
+            console="series-s",
+            env={**_RDNA_COMMON, **_RDNA_FAST, **_SIX_CORES, **_EIGHT_GB_SERIES_S},
+        ),
+        Preset(
             name="rx7600-rdna-firstrun",
             summary="rx7600-rdna, once after a new build: builds every pipeline as the title creates it",
             checkout="rdna",
@@ -305,7 +312,43 @@ PATH_VARIABLES = frozenset({
 })
 
 
+# What each runtime's own -Safe leaves out (its newer, faster ways still on
+# trial) and puts in instead; see play.ps1 / play-rdna.ps1.
+_SAFE_DROP = {
+    "rdna": set(_RDNA_FAST),
+    "belobug": set(_BELOBUG_FAST_WAYS) | set(_BELOBUG_PORT),
+}
+_SAFE_ADD = {
+    "rdna": _RDNA_SAFE,
+    "belobug": _BELOBUG_SAFE_WAYS,
+}
+
+
+def safe_variant(preset: Preset) -> Preset | None:
+    """The same preset (console, resolution, caps, feel) without the newer
+    fast ways: what a crashed run is retried with. None if there is none."""
+
+    if preset.checkout not in _SAFE_DROP:
+        return None
+    env = {k: v for k, v in preset.env.items() if k not in _SAFE_DROP[preset.checkout]}
+    env.update(_SAFE_ADD[preset.checkout])
+    if env == preset.env:
+        return None
+    return Preset(
+        name=f"{preset.name}+safe",
+        summary=f"{preset.name} without the newer fast ways (retry after a crash)",
+        checkout=preset.checkout,
+        console=preset.console,
+        env=env,
+        amd_skips=preset.amd_skips,
+    )
+
+
 def get(name: str) -> Preset:
+    if name.endswith("+safe") and name[: -len("+safe")] in PRESETS:
+        variant = safe_variant(PRESETS[name[: -len("+safe")]])
+        if variant is not None:
+            return variant
     try:
         return PRESETS[name]
     except KeyError:

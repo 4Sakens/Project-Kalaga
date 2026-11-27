@@ -306,7 +306,7 @@ def cmd_launch(args) -> int:
 
 
 DEFAULT_SESSION = {
-    "rdna": ["rx7600-rdna", "rx7600-rdna-balanced", "rx7600-rdna-quality"],
+    "rdna": ["rx7600-rdna", "rx7600-rdna-6core", "rx7600-rdna-balanced", "rx7600-rdna-quality"],
     "belobug": ["rx7600-belobug", "rx7600-belobug-6core", "rx7600-belobug-fast"],
     "fork": ["rx7600-fork"],
 }
@@ -357,7 +357,12 @@ def cmd_session(args) -> int:
           f"({args.minutes:g} min in the world + {args.load_seconds} s to load); results in {out_dir}")
     print("          Play the same stretch every run (same save, same route), so the runs compare.")
     results: list[session.Result] = []
-    for i, name in enumerate(names, 1):
+    queue = [(name, False) for name in names]
+    i = 0
+    while queue:
+        name, is_retry = queue.pop(0)
+        if not is_retry:
+            i += 1
         cfg.launch.preset = name
         launch_plan = launch.compose(assessment, scan, cfg)
         if not args.no_pause:
@@ -393,6 +398,12 @@ def cmd_session(args) -> int:
             print(f"          never reached the world (exit {result.exit_code}); see the log")
         if stop_session:
             break
+        crashed = result.exit_code not in ("time up", 0)
+        if crashed and not is_retry and not args.no_retry:
+            safe = presets.safe_variant(presets.get(name))
+            if safe is not None:
+                print(f"          crashed: retrying once as {safe.name} (the newer fast ways left out)")
+                queue.insert(0, (safe.name, True))
     if not results:
         return EXIT_RUNTIME_FAILED
 
@@ -414,8 +425,9 @@ def cmd_session(args) -> int:
         crashes = launch.crash_log(env, cfg)
         if crashes.is_file():
             z.writestr(f"session-{stamp}/crashes-tail.log", launch.tail(crashes, 200))
-    ranks = {n: session.picture_rank(presets.environment(presets.get(n)), presets.get(n).console)
-             for n in names}
+    ranks = {r.preset: session.picture_rank(presets.environment(presets.get(r.preset)),
+                                            presets.get(r.preset).console)
+             for r in results}
     pick = session.choose(results, ranks)
     pick_lines = ["", "## Pick", "", f"**{pick.preset or 'none'}**: {pick.why}"]
     pick_lines += [f"- dropped `{name}`: {reason}" for name, reason in pick.dropped]
@@ -542,6 +554,115 @@ def cmd_prepare(args) -> int:
         print("prepare OK. `warm` only knows pipelines from runs with VICTORY_PIPELINE_BOOK=1\n"
               "(every rx7600-rdna and rx7600-belobug preset sets it): rerun prepare after\n"
               "the first play session.")
+    return EXIT_OK
+
+
+def cmd_home(args) -> int:
+    """Everything for a first evening at the PC, in order; stops at the first failure."""
+
+    import re
+    import subprocess
+
+    cfg = _cfg(args)
+    checkout = args.checkout
+    series = upstream.load(checkout)
+    runtime_dir = Path(args.runtime_dir or cfg.runtime.victory_dir or "")
+    config_path = Path(cfg.path) if cfg.path else None
+
+    def step(title: str) -> None:
+        print(f"\n=== {title}")
+
+    def run(argv: list[str], *, check: bool = True, cwd: str | None = None) -> int:
+        print("$ " + " ".join(argv))
+        if args.dry_run:
+            return 0
+        rc = subprocess.call(argv, cwd=cwd)
+        if check and rc != 0:
+            raise SystemExit(f"\nstopped: `{' '.join(argv)}` failed (exit {rc}). Fix that, then run "
+                             "`python -m kalaga home` again: finished steps are skipped or quick.")
+        return rc
+
+    def kalaga(*more: str, check: bool = True) -> int:
+        argv = [sys.executable, "-m", "kalaga", *more]
+        if config_path:
+            argv += ["--config", str(config_path)]
+        return run(argv, check=check, cwd=str(config.REPO_ROOT))
+
+    if not config_path or not config_path.is_file():
+        print("no kalaga.toml: copy kalaga.example.toml to kalaga.toml and set [game] dir first",
+              file=sys.stderr)
+        return EXIT_NOT_READY
+    if not str(runtime_dir).strip() or str(runtime_dir) == ".":
+        print("give --runtime-dir (where VIctory-RDNA goes, e.g. D:\\VIctory-RDNA)", file=sys.stderr)
+        return EXIT_NOT_READY
+
+    try:
+        step("1. Kalaga up to date")
+        if not args.no_pull:
+            run(["git", "-C", str(config.REPO_ROOT), "pull", "--ff-only"], check=False)
+
+        step(f"2. {checkout} checkout at {runtime_dir}")
+        if not (runtime_dir / ".git").is_dir():
+            run(["git", "clone", series.repo, str(runtime_dir)])
+        else:
+            rc, out, _ = util.run(["git", "-C", str(runtime_dir), "remote", "get-url", "origin"])
+            if rc == 0 and series.repo.lower().rstrip("/").removesuffix(".git") not in out.lower():
+                raise SystemExit(f"\nstopped: {runtime_dir} is a clone of {out.strip()}, not {series.repo}. "
+                                 "Give --runtime-dir a new folder.")
+        if args.runtime_dir and Path(args.runtime_dir) != Path(cfg.runtime.victory_dir or ""):
+            text = config_path.read_text(encoding="utf-8")
+            line = f"victory_dir = '{runtime_dir}'"
+            if re.search(r"(?m)^\s*victory_dir\s*=", text):
+                text = re.sub(r"(?m)^\s*victory_dir\s*=.*$", line.replace("\\", "\\\\"), text, count=1)
+            elif "[runtime]" in text:
+                text = text.replace("[runtime]", "[runtime]\n" + line, 1)
+            else:
+                text += f"\n[runtime]\n{line}\n"
+            print(f"set [runtime] {line} in {config_path}")
+            if not args.dry_run:
+                config_path.write_text(text, encoding="utf-8")
+
+        step(f"3. picked upstream fixes ({len(series.patches)} patches) on branch kalaga-prs")
+        rc, branch, _ = util.run(["git", "-C", str(runtime_dir), "rev-parse", "--abbrev-ref", "HEAD"])
+        if branch.strip() == "kalaga-prs" and not args.repatch:
+            print("already on kalaga-prs (use --repatch after a git pull of Kalaga brought new patches)")
+        else:
+            run(["git", "-C", str(runtime_dir), "fetch", "origin", series.commit], check=False)
+            run(["git", "-C", str(runtime_dir), "checkout", "-B", "kalaga-prs", series.commit])
+            kalaga("patches", "--runtime", checkout, "--dir", str(runtime_dir), "--strict")
+
+        step("4. build victory.exe")
+        kalaga("build")
+
+        first = f"rx7600-{checkout}-firstrun"
+        session_presets = DEFAULT_SESSION[checkout]
+        if not args.skip_first_run and first in presets.PRESETS:
+            step(f"5. first run ({first}): every pipeline built as the title makes it")
+            kalaga("prepare", "--preset", first)
+            print(f"   Play {args.first_run_minutes:g} minutes: load your save, walk and drive around. "
+                  "It is slower than later runs; that is the point.")
+            if not args.dry_run and not args.yes:
+                input("   Press Enter to start ")
+            kalaga("launch", "--preset", first, "--timeout", str(int(args.first_run_minutes * 60)), check=False)
+
+        step("6. prepare every session preset (translations are cached per switch set)")
+        for name in session_presets:
+            kalaga("prepare", "--preset", name)
+
+        step(f"7. session: {', '.join(session_presets)}")
+        session_args = ["session", "--checkout", checkout, "--apply", "--minutes", f"{args.minutes:g}"]
+        if args.yes:
+            session_args.append("--no-pause")
+        kalaga(*session_args)
+    except SystemExit as stop:
+        print(stop.code if isinstance(stop.code, str) else "stopped", file=sys.stderr)
+        return EXIT_RUNTIME_FAILED
+    except KeyboardInterrupt:
+        print("\nstopped (Ctrl+C). Run `python -m kalaga home` again to carry on.")
+        return EXIT_RUNTIME_FAILED
+    print("\nDone. Turn AFMF on now if you want it (docs/amd-settings.md), then play with:\n"
+          "    python -m kalaga launch\n"
+          "Send logs\\session-<time>.zip for tuning.")
     return EXIT_OK
 
 
@@ -698,9 +819,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--minutes", type=float, default=4.0, help="minutes in the world per run")
     p.add_argument("--load-seconds", type=int, default=150, help="added per run for loading (default 150)")
     p.add_argument("--no-pause", action="store_true", help="do not wait for Enter between runs")
+    p.add_argument("--no-retry", action="store_true",
+                   help="do not retry a crashed run with the safe set")
     p.add_argument("--apply", action="store_true",
                    help="write the picked preset into kalaga.toml ([launch] preset)")
     p.set_defaults(func=cmd_session)
+
+    p = sub.add_parser("home", parents=[common],
+                       help="first evening at the PC: clone, patch, build, prepare, first run, session")
+    p.add_argument("--checkout", choices=["rdna", "belobug"], default="rdna")
+    p.add_argument("--runtime-dir", help="where the runtime is or goes (default: [runtime] victory_dir)")
+    p.add_argument("--minutes", type=float, default=4.0, help="minutes in the world per session run")
+    p.add_argument("--first-run-minutes", type=float, default=12.0)
+    p.add_argument("--skip-first-run", action="store_true")
+    p.add_argument("--repatch", action="store_true", help="rebuild the kalaga-prs branch from the pinned base")
+    p.add_argument("--no-pull", action="store_true")
+    p.add_argument("--yes", action="store_true", help="no Enter prompts")
+    p.add_argument("--dry-run", action="store_true", help="print the steps only")
+    p.set_defaults(func=cmd_home)
 
     p = sub.add_parser("presets", parents=[common], help="list the launch presets")
     p.set_defaults(func=cmd_presets)

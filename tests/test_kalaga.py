@@ -434,7 +434,7 @@ class LaunchTests(TempCase):
         from kalaga import presets
         for name, preset in presets.PRESETS.items():
             env = presets.environment(preset)
-            self.assertEqual("VICTORY_THIN_THREADS" in env, name == "rx7600-belobug-6core", name)
+            self.assertEqual("VICTORY_THIN_THREADS" in env, name.endswith("-6core"), name)
             self.assertNotIn("VICTORY_PIPELINE_WORKERS", env, name)
             self.assertNotIn("VICTORY_VIEW_THREADS", env, name)
 
@@ -480,6 +480,18 @@ class LaunchTests(TempCase):
         cfg.launch.preset = "rx7600-rdna"
         assessment.executable.write_bytes(b"MZ rebuilt")
         self.assertTrue(flagged())  # a new build
+
+    def test_safe_variant_keeps_picture_and_feel_but_drops_fast_ways(self) -> None:
+        from kalaga import presets
+        base = presets.get("rx7600-rdna-balanced")
+        safe = presets.get("rx7600-rdna-balanced+safe")
+        self.assertEqual(safe.console, base.console)
+        for key in ("VICTORY_RENDER_SCALE", "VICTORY_TEXTURE_BUDGET_MB", "VICTORY_KBM_GTA", "VICTORY_FULLSCREEN"):
+            self.assertEqual(safe.env[key], base.env[key], key)
+        self.assertNotIn("VICTORY_PORT_CBV", safe.env)
+        self.assertEqual(safe.env["VICTORY_UNDER_WIDE"], "0")
+        self.assertNotIn("VICTORY_PORT_CBV", presets.get("rx7600-belobug-fast+safe").env)
+        self.assertIsNone(presets.safe_variant(presets.get("rx7600-fork")))
 
     def test_unknown_preset_is_an_error(self) -> None:
         cfg, scan, assessment = self._setup()

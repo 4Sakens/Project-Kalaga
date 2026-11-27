@@ -58,6 +58,15 @@ Task Manager below ~90 % while fps is low means CPU-bound.
 
 ## The test session (one command, when home)
 
+All of it in one go (stops at the first problem; run it again to carry on):
+
+```powershell
+git pull
+python -m kalaga home --runtime-dir D:\VIctory-RDNA
+```
+
+or step by step:
+
 ```powershell
 git pull
 python -m kalaga patches --runtime rdna --dir D:\VIctory-RDNA   # optional: the picked upstream PRs

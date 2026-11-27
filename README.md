@@ -90,6 +90,7 @@ python -m kalaga doctor                    # hardware + toolchain
 python -m kalaga validate                  # dump identity, archives, manifest
 python -m kalaga plan                      # what can run, and what blocks it
 python -m kalaga build                     # builds the selected runtime
+python -m kalaga home --runtime-dir D:\VIctory-RDNA   # everything below, in order, for a first evening
 python -m kalaga patches                   # list / apply picked upstream PRs (patches/rdna, belobug)
 python -m kalaga prepare                   # shaders + pipelines ahead (no stutter)
 python -m kalaga presets                   # console + switch sets per PC

@@ -93,9 +93,9 @@ already have and that apply).
 | Vice-Tay 17e3e2c | Wave sections scanned past an unmatched saveexec | picture |
 | Vice-Tay 8cbd5cb, 53a1f16 | Texture retry deadlines kept when card room returns; pending texture changes kept when queues fill: **late or stale textures** | picture |
 | Vice-Tay 7168410 (rdna only) | A panic while building one pipeline no longer kills its worker (every later pipeline on it went missing). Only its own test kept | stability |
-| Vice-Tay 1fa36ec, c133996, 903aa10 (rdna only for two) | Warm-up worker failures; warm-up skipped when the title made no pipeline cache; device-loss range pattern | stability |
+| Vice-Tay 1fa36ec, 903aa10 (rdna only) | Warm-up worker failures; device-loss range pattern | stability |
 
-Not taken: Belobug 4ad8527 (port 2 sync parts) competes with AvatarManz's
+Not taken: Vice-Tay c133996 (warm skipped on a fresh cache) solves what Belobug #456, already in the series, solves the other way (its test failed against it); Belobug 4ad8527 (port 2 sync parts) competes with AvatarManz's
 port 2 rework above; Vice-Tay 3fe4811, 5307ba7, 7993c1b, e95a2f5, a550e0c
 conflict with code these trees changed differently. Vice-Tay 2b51c6c (21 → 6
 fps from exact copies of structured views) concerns cards without raw-twin
