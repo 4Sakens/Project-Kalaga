@@ -62,9 +62,17 @@ Task Manager below ~90 % while fps is low means CPU-bound.
 git pull
 python -m kalaga patches --runtime rdna --dir D:\VIctory-RDNA   # optional: the picked upstream PRs
 python -m kalaga build
+python -m kalaga prepare --preset rx7600-rdna-firstrun
+python -m kalaga launch --preset rx7600-rdna-firstrun   # once: builds every pipeline; play 10 min
 python -m kalaga prepare --preset rx7600-rdna
-python -m kalaga session                       # rdna-safe, rdna, rdna-quality; ~6.5 min each
+python -m kalaga prepare --preset rx7600-rdna-balanced
+python -m kalaga prepare --preset rx7600-rdna-quality
+python -m kalaga session --apply               # rdna, rdna-balanced, rdna-quality; ~6.5 min each
 ```
+
+Do the driver and Windows settings in [amd-settings.md](amd-settings.md)
+first (AFMF stays **off** during the session, so the numbers are the game's
+own; turn it on afterwards).
 
 `kalaga session` starts each preset in turn (press Enter before each), keeps
 it running for 4 minutes in the world plus 150 s to load, then stops it.
@@ -76,7 +84,10 @@ every 20 s, and prints:
 | Preset | In world | fps median (p10-p90; 1% low) | Prep / GPU ms | Bound | Hitches <10 fps | Dropped draws | Peak RAM | Peak VRAM | Exit |
 |---|---|---|---|---|---|---|---|---|---|
 
-"Bound" says which side the frame waits on: **GPU** means picture settings
+At the end it **picks**: the best-looking preset that ran cleanly, stayed
+under ~7.5 GB of graphics memory and ~29.5 GB of RAM, is at most 15 %
+slower than the fastest run and holds 18 fps; else the fastest. `--apply`
+writes it into `kalaga.toml`. "Bound" says which side the frame waits on: **GPU** means picture settings
 decide the frame rate (Step 2), **CPU** means Step 3 matters. Exit "time up"
 is a normal stop; any number is a crash (the log is in the bundle). Then the
 Belobug runs: point `victory_dir` at it and `kalaga session --checkout belobug`.

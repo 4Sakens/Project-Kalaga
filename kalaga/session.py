@@ -183,3 +183,83 @@ class MemorySampler:
             self._thread.join(timeout=20)
         gb = lambda b: b / 2**30 if b else None
         return gb(self.ram_peak), gb(self.vram_peak)
+
+
+# The card's 8 GB less what Windows and the desktop keep: over this a preset
+# lives on borrowed system memory (late textures, stutter, device removal).
+VRAM_LIMIT_GB = 7.5
+# RAM: 32 GiB less ~2.5 for Windows; over it the page file carries the game.
+RAM_LIMIT_GB = 29.5
+# The frame rate a pick must hold, and how far under the fastest it may be
+# for a better picture.
+MIN_FPS = 18.0
+QUALITY_SLACK = 0.85
+
+
+def picture_rank(env: dict[str, str], console: str) -> int:
+    """Higher = better picture: Series X native 1080p > Series X at a lower
+    render scale > Series S."""
+
+    if console != "series-x":
+        return 1
+    try:
+        scale = float(env.get("VICTORY_RENDER_SCALE", "0.667"))
+    except ValueError:
+        scale = 0.667
+    return 3 if scale >= 0.99 else 2
+
+
+@dataclass
+class Pick:
+    preset: str | None
+    why: str
+    dropped: list[tuple[str, str]] = field(default_factory=list)
+
+
+def choose(results: list[Result], ranks: dict[str, int]) -> Pick:
+    """The best-looking preset that plays well, from one session's runs."""
+
+    ok: list[tuple[Result, float]] = []
+    dropped: list[tuple[str, str]] = []
+    for r in results:
+        st = r.stats()
+        if r.exit_code not in ("time up", 0):
+            dropped.append((r.preset, f"crashed or stopped (exit {r.exit_code})"))
+        elif st.get("world_s", 0) < 30:
+            dropped.append((r.preset, f"only {st.get('world_s', 0)} s in the world"))
+        elif r.vram_peak_gb is not None and r.vram_peak_gb > VRAM_LIMIT_GB:
+            dropped.append((r.preset, f"{r.vram_peak_gb:.1f} GB graphics memory (over {VRAM_LIMIT_GB})"))
+        elif r.ram_peak_gb is not None and r.ram_peak_gb > RAM_LIMIT_GB:
+            dropped.append((r.preset, f"{r.ram_peak_gb:.1f} GB RAM (over {RAM_LIMIT_GB}: paging)"))
+        else:
+            ok.append((r, st["fps_median"]))
+    if not ok:
+        return Pick(None, "no preset ran cleanly: start from the -safe preset and send the logs", dropped)
+    fastest = max(fps for _, fps in ok)
+    floor = max(MIN_FPS, QUALITY_SLACK * fastest)
+    good = [(r, fps) for r, fps in ok if fps >= floor]
+    if good:
+        best, fps = max(good, key=lambda x: (ranks.get(x[0].preset, 0), x[1]))
+        why = (f"best picture at {fps:.1f} fps median (fastest clean run {fastest:.1f}; "
+               f"picks may be up to {100 - QUALITY_SLACK * 100:.0f} % slower and must hold {MIN_FPS:g})")
+    else:
+        best, fps = max(ok, key=lambda x: x[1])
+        why = f"fastest clean run ({fps:.1f} fps median); none held {floor:.1f} fps"
+    return Pick(best.preset, why, dropped)
+
+
+def set_preset_in_config(text: str, preset: str) -> str:
+    """kalaga.toml with [launch] preset set (the section made if missing)."""
+
+    import re
+
+    line = f"preset = '{preset}'"
+    m = re.search(r"(?ms)^\[launch\][^\n]*\n(.*?)(?=^\[|\Z)", text)
+    if not m:
+        return text.rstrip("\n") + f"\n\n[launch]\n{line}\n"
+    body = m.group(1)
+    if re.search(r"(?m)^\s*preset\s*=", body):
+        body = re.sub(r"(?m)^\s*preset\s*=.*$", line, body, count=1)
+    else:
+        body = line + "\n" + body
+    return text[: m.start(1)] + body + text[m.end(1):]

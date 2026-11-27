@@ -71,6 +71,67 @@ def stage_dependencies(assessment: Assessment, cfg: Config) -> list[Path]:
     return staged
 
 
+def shared_saves_dir() -> str:
+    """One save/settings folder for every VIctory checkout.
+
+    The runtimes' own default (%LOCALAPPDATA%\\victory\\data), set explicitly
+    so a victory.toml with its own data_dir in one checkout cannot split the
+    saves between VIctory-RDNA and Belobug.
+    """
+
+    local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return str(Path(local) / "victory" / "data")
+
+
+PREPARED_FILE = "prepared.json"
+
+
+def _exe_stamp(exe: Path) -> dict:
+    st = Path(exe).stat()
+    return {"exe": str(exe), "size": st.st_size, "mtime_ns": st.st_mtime_ns}
+
+
+def record_prepared(cfg: Config, exe: Path, preset: str) -> None:
+    """kalaga prepare finished for this build of victory.exe (and preset)."""
+
+    import json
+
+    cfg.logs_dir.mkdir(parents=True, exist_ok=True)
+    data = {}
+    path = cfg.logs_dir / PREPARED_FILE
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    data[preset or "-"] = _exe_stamp(exe)
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def prepare_note(cfg: Config, exe: Path, preset: str) -> str | None:
+    """A warning when this build was not prepared with this preset's switches.
+
+    Cached translations of an earlier build are served as they are; only
+    `victory shaders` (kalaga prepare) translates them again. Without it the
+    shader fixes in patches/ do not reach the picture yet.
+    """
+
+    import json
+
+    try:
+        data = json.loads((cfg.logs_dir / PREPARED_FILE).read_text(encoding="utf-8"))
+        stamp = _exe_stamp(exe)
+    except (OSError, ValueError):
+        data, stamp = {}, None
+    if stamp is not None and isinstance(data, dict) and data.get(preset or "-") == stamp:
+        return None
+    flag = f" --preset {preset}" if preset else ""
+    return (f"this build of victory.exe was not prepared{' with this preset' if preset else ''}: "
+            f"run `python -m kalaga prepare{flag}` first, or shaders cached by an earlier build "
+            "are used as they are (fixes from patches/ not in the picture yet) and new ones stutter")
+
+
 def victory_env(cfg: Config, preset: presets.Preset | None) -> tuple[dict[str, str], list[str]]:
     """The environment a victory process gets: inherited, preset, extra_env.
 
@@ -96,6 +157,8 @@ def victory_env(cfg: Config, preset: presets.Preset | None) -> tuple[dict[str, s
                          + " (put them in [launch.extra_env] to keep them)")
         env.update(presets.environment(preset))
         notes.append(f"preset {preset.name}: {preset.summary}")
+        if preset.checkout in ("rdna", "belobug"):
+            env.setdefault("VICTORY_DATA_DIR", shared_saves_dir())
     if cfg.runtime.dxc_dir:
         env["VICTORY_DXC_DIR"] = cfg.runtime.dxc_dir
     env.update(cfg.launch.extra_env)
@@ -122,6 +185,9 @@ def compose(assessment: Assessment, scan: gamefs.GameScan, cfg: Config) -> Launc
 
     if assessment.runtime == "victory":
         env, notes = victory_env(cfg, preset)
+        warn = prepare_note(cfg, Path(assessment.executable), cfg.launch.preset)
+        if warn:
+            notes.append(warn)
         console = cfg.launch.console or (preset.console if preset else "") or "series-x"
         argv = [str(assessment.executable), "run", title, "--execute"]
         argv += ["--console", console]

@@ -456,6 +456,31 @@ class LaunchTests(TempCase):
         self.assertEqual(result.env["VICTORY_PORT_BUFFERS"], "1")
         self.assertEqual(result.env["VICTORY_INPLACE"], "2")
 
+    def test_rdna_and_belobug_presets_play_at_real_speed_with_mouse_and_shared_saves(self) -> None:
+        cfg, scan, assessment = self._setup()
+        for name in ("rx7600-rdna", "rx7600-belobug-quality"):
+            cfg.launch.preset = name
+            env = launch.compose(assessment, scan, cfg).env
+            self.assertEqual(env["VICTORY_MAX_STEP_MS"], "100", name)
+            self.assertEqual(env["VICTORY_KBM_GTA"], "1", name)
+            self.assertTrue(env["VICTORY_DATA_DIR"].endswith(str(Path("victory") / "data")), name)
+        cfg.launch.preset = "rx7600-fork"
+        env = launch.compose(assessment, scan, cfg).env
+        self.assertNotIn("VICTORY_MAX_STEP_MS", env)  # the measured fork setup stays as it was
+
+    def test_unprepared_build_is_flagged_until_prepare(self) -> None:
+        cfg, scan, assessment = self._setup()
+        cfg.launch.preset = "rx7600-rdna"
+        flagged = lambda: any("was not prepared" in n for n in launch.compose(assessment, scan, cfg).notes)
+        self.assertTrue(flagged())
+        launch.record_prepared(cfg, assessment.executable, "rx7600-rdna")
+        self.assertFalse(flagged())
+        cfg.launch.preset = "rx7600-rdna-quality"
+        self.assertTrue(flagged())  # prepared with other switches
+        cfg.launch.preset = "rx7600-rdna"
+        assessment.executable.write_bytes(b"MZ rebuilt")
+        self.assertTrue(flagged())  # a new build
+
     def test_unknown_preset_is_an_error(self) -> None:
         cfg, scan, assessment = self._setup()
         cfg.launch.preset = "rx9999"
@@ -698,6 +723,40 @@ class SessionTests(unittest.TestCase):
         from kalaga import session
         self.assertEqual(session.exit_label(1, "...\n# timed out after 390s\n"), "time up")
         self.assertEqual(session.exit_label(3221225477, "...\n"), 3221225477)
+
+    def _run(self, name, fps, vram=6.0, ram=24.0, exit_code="time up", seconds=120):
+        from kalaga import session
+        text = "".join(self.line(fps, 30.0, 20.0, 1800) for _ in range(seconds))
+        return session.Result(name, session.parse(text), ram, vram, exit_code)
+
+    def test_pick_prefers_the_better_picture_within_reach(self) -> None:
+        from kalaga import session
+        ranks = {"s": 1, "balanced": 2, "native": 3}
+        pick = session.choose([self._run("s", 22.0), self._run("balanced", 20.0), self._run("native", 16.0)], ranks)
+        self.assertEqual(pick.preset, "balanced")  # native is > 15 % slower and under 18
+
+    def test_pick_drops_crashes_and_overfull_vram(self) -> None:
+        from kalaga import session
+        ranks = {"s": 1, "balanced": 2, "native": 3}
+        pick = session.choose([self._run("s", 22.0), self._run("balanced", 21.5, vram=7.9),
+                               self._run("native", 21.0, exit_code=5)], ranks)
+        self.assertEqual(pick.preset, "s")
+        self.assertEqual({d[0] for d in pick.dropped}, {"balanced", "native"})
+
+    def test_pick_falls_back_to_the_fastest_and_reports_none_when_all_fail(self) -> None:
+        from kalaga import session
+        ranks = {"s": 1, "native": 3}
+        self.assertEqual(session.choose([self._run("s", 14.0), self._run("native", 10.0)], ranks).preset, "s")
+        self.assertIsNone(session.choose([self._run("s", 14.0, exit_code=5)], ranks).preset)
+
+    def test_set_preset_in_config(self) -> None:
+        from kalaga import session
+        text = "[game]\ndir = 'D:\\g'\n\n[launch]\npreset = 'old'\nconsole = ''\n\n[runtime]\nx = 1\n"
+        out = session.set_preset_in_config(text, "rx7600-rdna-balanced")
+        self.assertIn("[launch]\npreset = 'rx7600-rdna-balanced'\nconsole = ''", out)
+        self.assertIn("[runtime]\nx = 1", out)
+        self.assertIn("[launch]\npreset = 'p'", session.set_preset_in_config("[launch]\nconsole = ''\n", "p"))
+        self.assertTrue(session.set_preset_in_config("[game]\n", "p").endswith("[launch]\npreset = 'p'\n"))
 
     def test_default_session_presets_exist(self) -> None:
         from kalaga import cli, presets

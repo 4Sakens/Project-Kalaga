@@ -111,7 +111,42 @@ _EIGHT_GB_SERIES_S = {"VICTORY_TEXTURE_BUDGET_MB": "5120"}
 # Series X's bigger render targets need more of the card.
 _EIGHT_GB_SERIES_X = {"VICTORY_TEXTURE_BUDGET_MB": "4608"}
 
-_BELOBUG_COMMON = {**_BELOBUG_BASE, **_THIRTY_TWO_GB, **_PIPELINE_BOOK}
+# How it plays, for every VIctory-RDNA and Belobug preset:
+# - The world at real speed below 15 fps. The title never steps the world
+#   more than 1/15 s a frame, so at 8 fps it runs at half speed (Vice-Tay
+#   #124, patches 0013/0014). 100 ms: its author's value; real speed down to
+#   10 fps. Only on the known build; ignored by an unpatched runtime.
+# - GTA V PC-style keyboard and mouse (Belobug's VICTORY_KBM_GTA, patches
+#   0018-0020 bring it to VIctory-RDNA): F2 or ` toggles mouse look,
+#   LMB/RMB = shoot/aim, Shift sprint, Space jump, F enter, R reload, Tab
+#   weapon wheel. A controller still works and takes over when used.
+# - Full screen: the title's window as a frameless popup over the whole
+#   primary monitor (Vice-Tay's VICTORY_FULLSCREEN, patches 0022/0020), as a
+#   console fills its screen. Also what AMD Fluid Motion Frames needs (it
+#   works only in full screen or borderless full screen).
+_FEEL = {
+    "VICTORY_MAX_STEP_MS": "100",
+    "VICTORY_KBM_GTA": "1",
+    "VICTORY_FULLSCREEN": "1",
+}
+# Once, on a fresh build: every pipeline the title creates is built at once
+# (not only those an earlier run asked for), so the driver's own cache holds
+# them for later runs. The first run is slower; later runs stutter less.
+_FIRST_RUN = {
+    "VICTORY_EARLY_ALL": "1",
+}
+
+# Series X assets and settings at 1080p, drawn at 0.8 scale (1536x864) and
+# brought up by the title's own upscaler: Series X's textures, shadows and
+# effects for ~36 % fewer pixels than native 1080p, ~45 % more than Series S
+# (1280x720). VIctory-RDNA's author: no scale under 0.67 (the title's
+# upscaler assumes >= 2/3; lower made textures jump or crash).
+_SERIES_X_1080P_BALANCED = {
+    "VICTORY_OUTPUT": "1920x1080",
+    "VICTORY_RENDER_SCALE": "0.8",
+}
+
+_BELOBUG_COMMON = {**_BELOBUG_BASE, **_THIRTY_TWO_GB, **_PIPELINE_BOOK, **_FEEL}
 
 # XaviFortes/VIctory-RDNA: VIctory-7900XTX tuned for RDNA3 (the RX 7600's
 # architecture). scripts/rdna-preset.json "base" and "fast", its default.
@@ -151,7 +186,7 @@ _RDNA_SAFE = {
     "VICTORY_UNDER_WIDE": "0",
     "VICTORY_LAND_ECHO": "0",
 }
-_RDNA_COMMON = {**_RDNA_BASE, **_THIRTY_TWO_GB, **_PIPELINE_BOOK}
+_RDNA_COMMON = {**_RDNA_BASE, **_THIRTY_TWO_GB, **_PIPELINE_BOOK, **_FEEL}
 
 # The fxceless/victory-fork switches measured in docs/pc-test.md (run 3),
 # exactly: this preset is the known-good fallback (Series X, 0 removals).
@@ -183,6 +218,20 @@ PRESETS: dict[str, Preset] = {
             checkout="rdna",
             console="series-x",
             env={**_RDNA_COMMON, **_RDNA_FAST, **_SERIES_X_1080P, **_EIGHT_GB_SERIES_X},
+        ),
+        Preset(
+            name="rx7600-rdna-balanced",
+            summary="VIctory-RDNA, Series X assets at 1080p drawn at 0.8 scale: near-native sharpness, less GPU",
+            checkout="rdna",
+            console="series-x",
+            env={**_RDNA_COMMON, **_RDNA_FAST, **_SERIES_X_1080P_BALANCED, **_EIGHT_GB_SERIES_X},
+        ),
+        Preset(
+            name="rx7600-rdna-firstrun",
+            summary="rx7600-rdna, once after a new build: builds every pipeline as the title creates it",
+            checkout="rdna",
+            console="series-s",
+            env={**_RDNA_COMMON, **_RDNA_FAST, **_EIGHT_GB_SERIES_S, **_FIRST_RUN},
         ),
         Preset(
             name="rx7600-rdna-safe",
@@ -218,6 +267,13 @@ PRESETS: dict[str, Preset] = {
             checkout="belobug",
             console="series-s",
             env={**_BELOBUG_COMMON, **_BELOBUG_FAST_WAYS, **_BELOBUG_PORT, **_EIGHT_GB_SERIES_S},
+        ),
+        Preset(
+            name="rx7600-belobug-firstrun",
+            summary="rx7600-belobug, once after a new build: builds every pipeline as the title creates it",
+            checkout="belobug",
+            console="series-s",
+            env={**_BELOBUG_COMMON, **_BELOBUG_FAST_WAYS, **_EIGHT_GB_SERIES_S, **_FIRST_RUN},
         ),
         Preset(
             name="rx7600-belobug-safe",

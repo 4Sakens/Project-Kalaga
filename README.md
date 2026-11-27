@@ -78,7 +78,9 @@ fork base), with **Belobug/VIctory-Belobug-AMD** as the second choice, both
 with the Series S profile and an 8 GB texture cap. `python -m kalaga presets` lists the
 launch presets; why and how to set it up: [docs/hardware-pick.md](docs/hardware-pick.md).
 What to optimize next without losing picture quality, and the test session to
-run: [docs/optimization-plan.md](docs/optimization-plan.md).
+run: [docs/optimization-plan.md](docs/optimization-plan.md). AMD driver and
+Windows settings (AFMF frame generation, Anti-Lag, page file):
+[docs/amd-settings.md](docs/amd-settings.md).
 
 ## Quick start
 
@@ -91,7 +93,7 @@ python -m kalaga build                     # builds the selected runtime
 python -m kalaga patches                   # list / apply picked upstream PRs (patches/rdna, belobug)
 python -m kalaga prepare                   # shaders + pipelines ahead (no stutter)
 python -m kalaga presets                   # console + switch sets per PC
-python -m kalaga session                   # run 3 presets back to back -> one fps/memory table
+python -m kalaga session --apply           # run 3 presets back to back, pick and set the best
 python -m kalaga launch --dry-run          # exact command + env
 python -m kalaga launch                    # run the title
 python -m kalaga report --out report.json  # one JSON with everything
@@ -153,6 +155,7 @@ ZZ-box/                       (github.com/4Sakens/Project-Kalaga)
 │   ├── related-work.md       survey of the other projects and forks
 │   ├── hardware-pick.md      runtime + presets for the RX 7600 / 32 GiB PC
 │   ├── optimization-plan.md  quality-preserving speed plan + test session
+│   ├── amd-settings.md       Adrenalin (AFMF, Anti-Lag) + Windows settings
 │   └── integration.md        the four-effort merge plan
 ├── fivestar/                 FiveStar Recomp (submodule)
 ├── xbox2windows/             Xbox2Windows (submodule)

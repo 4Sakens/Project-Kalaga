@@ -306,7 +306,7 @@ def cmd_launch(args) -> int:
 
 
 DEFAULT_SESSION = {
-    "rdna": ["rx7600-rdna-safe", "rx7600-rdna", "rx7600-rdna-quality"],
+    "rdna": ["rx7600-rdna", "rx7600-rdna-balanced", "rx7600-rdna-quality"],
     "belobug": ["rx7600-belobug", "rx7600-belobug-6core", "rx7600-belobug-fast"],
     "fork": ["rx7600-fork"],
 }
@@ -414,8 +414,29 @@ def cmd_session(args) -> int:
         crashes = launch.crash_log(env, cfg)
         if crashes.is_file():
             z.writestr(f"session-{stamp}/crashes-tail.log", launch.tail(crashes, 200))
+    ranks = {n: session.picture_rank(presets.environment(presets.get(n)), presets.get(n).console)
+             for n in names}
+    pick = session.choose(results, ranks)
+    pick_lines = ["", "## Pick", "", f"**{pick.preset or 'none'}**: {pick.why}"]
+    pick_lines += [f"- dropped `{name}`: {reason}" for name, reason in pick.dropped]
+    with summary.open("a", encoding="utf-8") as fh:
+        fh.write("\n".join(pick_lines) + "\n")
     print()
     print(session.table(results))
+    print(f"\npick    : {pick.preset or 'none'} ({pick.why})")
+    for name, reason in pick.dropped:
+        print(f"dropped : {name}: {reason}")
+    if pick.preset and args.apply:
+        if cfg.path and Path(cfg.path).is_file():
+            path = Path(cfg.path)
+            path.write_text(session.set_preset_in_config(path.read_text(encoding="utf-8"), pick.preset),
+                            encoding="utf-8")
+            print(f"applied : [launch] preset = '{pick.preset}' in {path}")
+        else:
+            print("applied : no kalaga.toml to write to; set [launch] preset by hand")
+    elif pick.preset:
+        print(f"          to use it: python -m kalaga session --apply next time, or set "
+              f"[launch] preset = '{pick.preset}'")
     print(f"\nsummary : {summary}\nsend    : {bundle}")
     return EXIT_OK
 
@@ -517,6 +538,7 @@ def cmd_prepare(args) -> int:
     if args.dry_run:
         print("dry run: nothing started")
     else:
+        launch.record_prepared(cfg, assessment.executable, cfg.launch.preset)
         print("prepare OK. `warm` only knows pipelines from runs with VICTORY_PIPELINE_BOOK=1\n"
               "(every rx7600-rdna and rx7600-belobug preset sets it): rerun prepare after\n"
               "the first play session.")
@@ -676,6 +698,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--minutes", type=float, default=4.0, help="minutes in the world per run")
     p.add_argument("--load-seconds", type=int, default=150, help="added per run for loading (default 150)")
     p.add_argument("--no-pause", action="store_true", help="do not wait for Enter between runs")
+    p.add_argument("--apply", action="store_true",
+                   help="write the picked preset into kalaga.toml ([launch] preset)")
     p.set_defaults(func=cmd_session)
 
     p = sub.add_parser("presets", parents=[common], help="list the launch presets")
