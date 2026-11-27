@@ -1,0 +1,422 @@
+From a298af954e5e5f74f042bf3cd623ad76e4131848 Mon Sep 17 00:00:00 2001
+From: Yve <yve@omnicrash.net>
+Date: Fri, 27 Nov 2026 17:50:27 +0100
+Subject: [PATCH 62/63] Audio DSP: compute mono convolutions, so TVs, phone
+ calls and reverb are heard
+
+The title sends the sound of speakers in the world (TVs, phone calls) through
+the audio DSP alone, and its reverb sends through it too. The DSP's outputs
+were zeros, so those were silent and reverb was dry (fxceless/victory-fork#1470).
+
+The impulse responses the title passes to XDspActivate are blocks of 2048
+floats: the unscaled 2048-point FFT of a 2048-sample window of the response,
+window k covering samples (k-1)*1024..(k+1)*1024, bins 0-1023 interleaved
+re/im, then a schedule block that starts with 0xFFFFACE1. Every block of the
+title's responses matches its neighbours under that reading. An input block
+zero-padded to 2048 samples times window k gives that block's part of the
+output k blocks later, in the second half of the inverse FFT.
+
+All the streams the title opened in a session with TVs, a phone call and
+reverb were mono convolutions of 1024-frame blocks; those are computed now.
+Stereo and 512-frame convolutions and the other transforms still give zeros.
+VICTORY_DSP_CONVOLVE=0 turns it off; VICTORY_DSP_GAIN scales it (default 2:
+the hardware's scaling is not known, and 1/2048 alone sounded quiet).
+
+(cherry picked from commit 72a83ce7cc79c26ff7211623e380fc7f2e862f54)
+---
+ crates/victory-hle/src/modules/dsp.rs         |  87 ++++++-
+ .../victory-hle/src/modules/dsp/convolve.rs   | 232 ++++++++++++++++++
+ 2 files changed, 311 insertions(+), 8 deletions(-)
+ create mode 100644 crates/victory-hle/src/modules/dsp/convolve.rs
+
+diff --git a/crates/victory-hle/src/modules/dsp.rs b/crates/victory-hle/src/modules/dsp.rs
+index 87c456ae..0aa4ff8d 100644
+--- a/crates/victory-hle/src/modules/dsp.rs
++++ b/crates/victory-hle/src/modules/dsp.rs
+@@ -9,11 +9,12 @@
+ //! the title checks it one block later and treats a late command as an
+ //! overrun. Commands complete when submitted here.
+ //!
+-//! The transforms themselves are not computed: the hardware takes impulse
+-//! responses already in its own partitioned frequency-domain layout, which
+-//! is not known. Outputs are silence, so reverb returns are dry.
+-// shortcut: no convolution or block transform; outputs are zeros. Needs the
+-// coprocessor's impulse response and spectrum layouts to do better.
++//! Mono convolutions of 1024-frame blocks, the only kind the title has been
++//! seen to use, are computed here ([`convolve`]): reverb, and the speakers in
++//! the world (TVs, phone calls), whose sound goes through the DSP alone.
++//! `VICTORY_DSP_CONVOLVE=0` turns that off.
++// shortcut: stereo and 512-frame convolutions and the other block transforms
++// are not computed; their outputs are zeros.
+ #![allow(non_snake_case)]
+ #![allow(clippy::not_unsafe_ptr_arg_deref)]
+ 
+@@ -24,6 +25,27 @@ use super::xasync::E_INVALIDARG;
+ use super::xgameruntime::{HRESULT, S_OK};
+ use crate::{HleModule, hle_export};
+ 
++mod convolve;
++
++/// Whether mono convolutions are computed (`VICTORY_DSP_CONVOLVE=0`: not).
++fn convolve_on() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| std::env::var_os("VICTORY_DSP_CONVOLVE").is_none_or(|v| v != "0"))
++}
++
++/// What the computed convolutions are scaled by: `VICTORY_DSP_GAIN`, else 2.
++/// The hardware's own scaling is not known. With the textbook 1/2048 of the
++/// inverse FFT, TVs and phone calls sounded quiet next to the rest of the
++/// mix; twice that sounded right by ear.
++const GAIN: f32 = 2.0;
++
++fn gain() -> f32 {
++    static GAIN_SET: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
++    *GAIN_SET.get_or_init(|| {
++        std::env::var("VICTORY_DSP_GAIN").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(GAIN)
++    })
++}
++
+ const E_POINTER: HRESULT = 0x8000_4003_u32 as i32;
+ const E_OUTOFMEMORY: HRESULT = 0x8007_000E_u32 as i32;
+ 
+@@ -62,6 +84,8 @@ pub struct Stream {
+     frames: u32,
+     channels: u32,
+     status: Box<Status>,
++    /// Set for a stream whose convolution is computed.
++    convolver: Option<convolve::Convolver>,
+ }
+ 
+ /// One block of work.
+@@ -148,11 +172,20 @@ pub extern "system" fn XDspActivate(
+         return E_INVALIDARG;
+     }
+     let (kind, options, frames, channels) = (desc.kind, desc.options, desc.frames, desc.channels);
++    let (ir, ir_floats) = (desc.ir, desc.ir_floats);
++    let convolver = if convolve_on() && kind == CONVOLUTION && channels == 1 && frames == 0x400 && !ir.is_null() {
++        // SAFETY: the title's description says the impulse response holds this many floats.
++        convolve::Convolver::new(unsafe { std::slice::from_raw_parts(ir, ir_floats as usize) })
++    } else {
++        None
++    };
+     tracing::debug!(
+         kind,
+         options,
+         frames,
+         channels,
++        ir_floats,
++        computed = convolver.is_some(),
+         "audio DSP stream activated"
+     );
+     {
+@@ -174,6 +207,7 @@ pub extern "system" fn XDspActivate(
+             reserved: 0,
+             result: S_OK,
+         }),
++        convolver,
+     });
+     // SAFETY: checked non-null.
+     unsafe {
+@@ -195,7 +229,8 @@ pub extern "system" fn XDspDeactivate(stream: *mut Stream) -> HRESULT {
+     S_OK
+ }
+ 
+-/// Completes the command at once: its output block is silence.
++/// Completes the command at once: its output block is the convolution where
++/// it is computed, silence otherwise.
+ pub extern "system" fn XDspSubmitCommand(
+     stream: *mut Stream,
+     command: *const Command,
+@@ -206,8 +241,14 @@ pub extern "system" fn XDspSubmitCommand(
+     }
+     // SAFETY: a stream from `XDspActivate`, the title's command.
+     let (stream, command) = unsafe { (&mut *stream, &*command) };
+-    if !command.output.is_null() {
+-        let samples = (stream.frames * stream.channels) as usize;
++    let samples = (stream.frames * stream.channels) as usize;
++    if !command.output.is_null() && !command.input.is_null() && let Some(convolver) = stream.convolver.as_mut() {
++        // SAFETY: the title's input and output buffers each hold one block of the stream.
++        let (input, output) = unsafe {
++            (std::slice::from_raw_parts(command.input, samples), std::slice::from_raw_parts_mut(command.output, samples))
++        };
++        convolver.process(input, output, command.gains[0] * gain());
++    } else if !command.output.is_null() {
+         // SAFETY: the title's output buffer holds one block of the stream.
+         unsafe { std::ptr::write_bytes(command.output, 0, samples) };
+     }
+@@ -311,4 +352,34 @@ mod tests {
+         assert_eq!(XDspDeactivate(stream), S_OK);
+         assert_eq!(XDspDisconnect(dsp), S_OK);
+     }
++
++    #[test]
++    fn a_mono_convolution_is_computed() {
++        let mut base = vec![0u8; 0x10_0000];
++        let mut dsp = std::ptr::null_mut();
++        assert_eq!(XDspConnectWithMaximumStreamLimit(base.as_mut_ptr().cast(), 0x10_0000, 24, 0x80, 1, &mut dsp), S_OK);
++        // a response of one sample, 0.5, two samples late
++        let ir = convolve::layout(&[0.0, 0.0, 0.5]);
++        let desc = StreamDesc {
++            kind: CONVOLUTION,
++            options: 0,
++            frames: 0x400,
++            channels: 1,
++            ir_floats: ir.len() as u32,
++            ir: ir.as_ptr(),
++        };
++        let (mut status, mut stream) = (std::ptr::null(), std::ptr::null_mut());
++        assert_eq!(XDspActivate(dsp, &desc, &mut status, &mut stream), S_OK);
++        let input: Vec<f32> = (0..0x400).map(|i| (i % 7) as f32 / 7.0).collect();
++        let mut output = vec![0f32; 0x400];
++        let command = Command { gains: [1.0, 1.0], input: input.as_ptr(), output: output.as_mut_ptr(), reserved: 0 };
++        let mut ticket = 0;
++        assert_eq!(XDspSubmitCommand(stream, &command, &mut ticket), S_OK);
++        for n in 2..0x400 {
++            let want = input[n - 2] * 0.5 * gain();
++            assert!((output[n] - want).abs() < 1e-4, "sample {n}: {} vs {want}", output[n]);
++        }
++        assert_eq!(XDspDeactivate(stream), S_OK);
++        assert_eq!(XDspDisconnect(dsp), S_OK);
++    }
+ }
+diff --git a/crates/victory-hle/src/modules/dsp/convolve.rs b/crates/victory-hle/src/modules/dsp/convolve.rs
+new file mode 100644
+index 00000000..88311f44
+--- /dev/null
++++ b/crates/victory-hle/src/modules/dsp/convolve.rs
+@@ -0,0 +1,232 @@
++//! The DSP's convolution, computed on the CPU.
++//!
++//! The title hands over each impulse response already in the coprocessor's
++//! layout. Read from the responses the retail title passes to `XDspActivate`
++//! (every block below checked against its neighbours): blocks of 2048 floats, each
++//! the unscaled 2048-point FFT of a 2048-sample window of the response that
++//! starts one block (1024 samples) before that block's own 1024 samples
++//! (window k covers samples (k-1)*1024 .. (k+1)*1024, zeros before 0). The
++//! bins are interleaved re/im, 0 to 1023 in natural order; bin 0's imaginary
++//! slot is 0 (the Nyquist bin is not kept). A last block that starts with
++//! the word 0xFFFFACE1 holds the hardware's schedule and is not response data.
++//!
++//! With windows like that, an input block zero-padded to 2048 samples and
++//! multiplied with window k gives, in the second half of the inverse FFT,
++//! that block's part of the output k blocks later: each output block is the
++//! second half of IFFT(sum over k of X[t-k] * H[k]) / 2048. How the hardware
++//! scales its result is not known; `dsp::GAIN` makes up for it.
++
++const N: usize = 2048;
++const B: usize = 1024;
++const TRAILER: u32 = 0xFFFF_ACE1;
++
++/// A complex radix-2 FFT of 2048 points.
++struct Fft {
++    cos: Vec<f32>,
++    sin: Vec<f32>,
++    rev: Vec<u16>,
++}
++
++fn fft() -> &'static Fft {
++    static FFT: std::sync::OnceLock<Fft> = std::sync::OnceLock::new();
++    FFT.get_or_init(|| {
++        let bits = N.trailing_zeros();
++        let rev = (0..N).map(|i| (i.reverse_bits() >> (usize::BITS - bits)) as u16).collect();
++        let (cos, sin) = (0..N / 2)
++            .map(|k| {
++                let a = -2.0 * std::f64::consts::PI * k as f64 / N as f64;
++                (a.cos() as f32, a.sin() as f32)
++            })
++            .unzip();
++        Fft { cos, sin, rev }
++    })
++}
++
++impl Fft {
++    /// In place; `inverse` flips the sign of the exponent and does not scale.
++    fn run(&self, re: &mut [f32; N], im: &mut [f32; N], inverse: bool) {
++        for i in 0..N {
++            let j = self.rev[i] as usize;
++            if i < j {
++                re.swap(i, j);
++                im.swap(i, j);
++            }
++        }
++        let sign = if inverse { -1.0 } else { 1.0 };
++        let mut len = 2;
++        while len <= N {
++            let half = len / 2;
++            let step = N / len;
++            for start in (0..N).step_by(len) {
++                for k in 0..half {
++                    let (wr, wi) = (self.cos[k * step], sign * self.sin[k * step]);
++                    let (a, b) = (start + k, start + k + half);
++                    let (br, bi) = (re[b] * wr - im[b] * wi, re[b] * wi + im[b] * wr);
++                    re[b] = re[a] - br;
++                    im[b] = im[a] - bi;
++                    re[a] += br;
++                    im[a] += bi;
++                }
++            }
++            len *= 2;
++        }
++    }
++}
++
++/// One mono convolution stream's state.
++pub(super) struct Convolver {
++    /// The response's windows: `parts` blocks of 1024 bins, split re/im.
++    h_re: Vec<f32>,
++    h_im: Vec<f32>,
++    parts: usize,
++    /// The last `parts` input spectra, a ring; `head` is the newest.
++    x_re: Vec<f32>,
++    x_im: Vec<f32>,
++    head: usize,
++    /// Input blocks in a row that were silent: once the ring holds only
++    /// silence, the output is silence without any arithmetic.
++    quiet: usize,
++}
++
++impl Convolver {
++    /// `None` when the response is not in the layout described above.
++    pub(super) fn new(ir: &[f32]) -> Option<Self> {
++        if ir.is_empty() || ir.len() % N != 0 {
++            return None;
++        }
++        let mut blocks = ir.len() / N;
++        if ir[(blocks - 1) * N].to_bits() == TRAILER {
++            blocks -= 1;
++        }
++        // trailing windows of zeros add nothing
++        while blocks > 0 && ir[(blocks - 1) * N..blocks * N].iter().all(|&v| v == 0.0) {
++            blocks -= 1;
++        }
++        let parts = blocks.max(1);
++        let mut h_re = vec![0f32; parts * B];
++        let mut h_im = vec![0f32; parts * B];
++        for k in 0..blocks {
++            let block = &ir[k * N..(k + 1) * N];
++            for bin in 0..B {
++                let (r, i) = (block[2 * bin], block[2 * bin + 1]);
++                // a non-finite value is not response data; leave it out
++                h_re[k * B + bin] = if r.is_finite() { r } else { 0.0 };
++                h_im[k * B + bin] = if i.is_finite() { i } else { 0.0 };
++            }
++        }
++        Some(Self {
++            h_re,
++            h_im,
++            parts,
++            x_re: vec![0f32; parts * B],
++            x_im: vec![0f32; parts * B],
++            head: 0,
++            quiet: usize::MAX,
++        })
++    }
++
++    /// One block: 1024 input samples in, 1024 output samples out, times `gain`.
++    pub(super) fn process(&mut self, input: &[f32], output: &mut [f32], gain: f32) {
++        let silent = input.iter().all(|&v| v == 0.0 || !v.is_finite());
++        self.quiet = if silent { self.quiet.saturating_add(1) } else { 0 };
++        self.head = (self.head + 1) % self.parts;
++        let slot = self.head * B;
++        if silent {
++            self.x_re[slot..slot + B].fill(0.0);
++            self.x_im[slot..slot + B].fill(0.0);
++            if self.quiet >= self.parts {
++                output.fill(0.0);
++                return;
++            }
++        } else {
++            let mut re = [0f32; N];
++            let mut im = [0f32; N];
++            for (r, &v) in re.iter_mut().zip(input) {
++                *r = if v.is_finite() { v } else { 0.0 };
++            }
++            fft().run(&mut re, &mut im, false);
++            self.x_re[slot..slot + B].copy_from_slice(&re[..B]);
++            self.x_im[slot..slot + B].copy_from_slice(&im[..B]);
++        }
++        // sum over k of X[t-k] * H[k]
++        let mut yr = [0f32; N];
++        let mut yi = [0f32; N];
++        for k in 0..self.parts {
++            let x = ((self.head + self.parts - k) % self.parts) * B;
++            let h = k * B;
++            let (xr, xi) = (&self.x_re[x..x + B], &self.x_im[x..x + B]);
++            let (hr, hi) = (&self.h_re[h..h + B], &self.h_im[h..h + B]);
++            for bin in 0..B {
++                yr[bin] += xr[bin] * hr[bin] - xi[bin] * hi[bin];
++                yi[bin] += xr[bin] * hi[bin] + xi[bin] * hr[bin];
++            }
++        }
++        // the spectrum of a real signal: the upper half mirrors the lower (Nyquist bin stays 0)
++        for bin in 1..B {
++            yr[N - bin] = yr[bin];
++            yi[N - bin] = -yi[bin];
++        }
++        yi[0] = 0.0;
++        fft().run(&mut yr, &mut yi, true);
++        let scale = gain / N as f32;
++        for (o, &v) in output.iter_mut().zip(&yr[B..]) {
++            *o = v * scale;
++        }
++    }
++}
++
++/// Builds a response in the hardware layout from time-domain samples, as
++/// the title's responses were found to be laid out.
++#[cfg(test)]
++pub(super) fn layout(ir: &[f32]) -> Vec<f32> {
++    // one window more than the response has blocks: its first half holds the last block
++    let blocks = ir.len().div_ceil(B) + 1;
++    let mut out = vec![0f32; (blocks + 1) * N];
++    for k in 0..blocks {
++        let mut re = [0f32; N];
++        let mut im = [0f32; N];
++        for (i, r) in re.iter_mut().enumerate() {
++            let t = (k * B + i) as isize - B as isize;
++            if t >= 0 && (t as usize) < ir.len() {
++                *r = ir[t as usize];
++            }
++        }
++        fft().run(&mut re, &mut im, false);
++        for bin in 0..B {
++            out[k * N + 2 * bin] = re[bin];
++            out[k * N + 2 * bin + 1] = if bin == 0 { 0.0 } else { im[bin] };
++        }
++    }
++    out[blocks * N] = f32::from_bits(TRAILER);
++    out
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn matches_a_direct_convolution_across_blocks() {
++        let ir: Vec<f32> = (0..2500).map(|i| ((i * 37 % 101) as f32 - 50.0) / 400.0 * (-(i as f32) / 900.0).exp()).collect();
++        let mut c = Convolver::new(&layout(&ir)).unwrap();
++        let input: Vec<f32> = (0..B * 5).map(|i| ((i * 13 % 29) as f32 - 14.0) / 20.0).collect();
++        let mut got = vec![0f32; B * 5];
++        for (i, o) in input.chunks(B).zip(got.chunks_mut(B)) {
++            c.process(i, o, 1.0);
++        }
++        for n in 0..B * 5 {
++            let want: f32 = (0..=n).filter(|&m| n - m < ir.len()).map(|m| input[m] * ir[n - m]).sum();
++            assert!((got[n] - want).abs() < 2e-3, "sample {n}: {} vs {want}", got[n]);
++        }
++    }
++
++    #[test]
++    fn a_silent_ring_gives_silence() {
++        let mut c = Convolver::new(&layout(&[1.0, 0.5])).unwrap();
++        let mut out = vec![1f32; B];
++        for _ in 0..4 {
++            c.process(&[0.0; B], &mut out, 1.0);
++        }
++        assert!(out.iter().all(|&v| v == 0.0));
++    }
++}
+-- 
+2.43.0
+

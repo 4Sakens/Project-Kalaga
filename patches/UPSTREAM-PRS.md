@@ -182,9 +182,41 @@ Not taken: DexNom 5f4c3df4 (City texture streaming and Radeon shadow
 pipelines, 2,600 lines over 27 files) and bc3cd4b0/b8ff22e4 (ray tracing
 preview), both built on the victory-world tree; the rest of 921d8d3b
 (early depth pipeline queue: RDNA's queue is different; ray buffer views).
-Marvisak 0736f8b3 (Series S UI planes composited, 12 conflicts), 61bfc773
+Marvisak 0736f8b3 (Series S UI planes composited) is already in both trees in
+another form: `compose.rs` lays the second (UI) plane over the scene, on by
+default (`VICTORY_PLANES`, from codec-d/cool_fox). 61bfc773
 (placed unordered texture views), 842b0cb7 (depth bounds reach the host),
 315cea18 (barrier start states): large conflicts. 4a53da72 fixes a bug in
 discard handling that RDNA does not have. 77fd8195 (cube denormals) needs
 an ftz helper RDNA lacks. e53474cd is an NVIDIA-only device removal. ea488a9f (typed UAV format
 check) applies as text but needs helpers neither tree has (CI caught it).
+
+## Seventh pass (2026-11-27 afternoon)
+
+**VIctory-RDNA moved** `68402ce` → `9cd7782`: four docs commits, a 7900 XTX
+benchmark. Its A/B confirms what our presets set: `VICTORY_PORT_BUFFERS=1` +
+`VICTORY_INPLACE=2` take 3-5 ms of CPU preparation off a frame. The series
+applies unchanged.
+
+rdna 0060, **dexnom-5f4c3df4** (the idea, not the code): the texture pass
+served every slot waiting for its memory before any new one, so a city's
+backlog could keep new textures from ever being made (black or low-detail
+surfaces). With both waiting, the waiting ones now take at most half a pass
+and the two take turns; with room for all, nothing changes. The rest of
+5f4c3df4 (packed masks, guest addresses for ray shaders, shadow pipelines)
+is built on lowerer state VIctory-RDNA does not have.
+
+**Belobug/VIctory-Belobug-AMD stopped answering anonymous fetches** today
+(a login prompt from GitHub's own runners too: private, deleted or down).
+The CI skips its legs with a warning until it comes back; the series stays
+as it was (0001-0053) and is not extended, since nothing new could be built
+or tested. A Belobug checkout made before today still works with it.
+
+From the first `kalaga candidates` run (rdna 0061-0063, all applied cleanly
+on the patched series):
+
+| Fix | What it does here |
+|---|---|
+| fxceless-pr1442 pipeline library loads | loads of different pipelines shared 64 locks by name hash, so two unrelated loads could wait seconds on each other: stutter while pipelines come in. Now only the same name waits |
+| fxceless-pr1491 audio DSP convolutions | TVs, phone calls and reverb go through the console's audio DSP, whose outputs were zeros: those were silent and reverb dry. Mono 1024-frame convolutions are computed now (`VICTORY_DSP_CONVOLVE=0` off, `VICTORY_DSP_GAIN`) |
+| marvisak-pr2254 v_mad_i64_i32 | a negative literal addend was zero-extended: wrong 64-bit results in shaders |

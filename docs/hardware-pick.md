@@ -52,6 +52,10 @@ trying.
 `[launch] preset = 'NAME'` uses one. `[launch.extra_env]` and an explicit
 `[launch] console` still override the preset.
 
+> **Belobug's repo cannot be fetched since 2026-11-27** (private, deleted or down).
+> The `rx7600-belobug*` presets need a Belobug checkout made before then; use the
+> VIctory-RDNA ones otherwise.
+
 | Preset | Runtime checkout | What it sets |
 |---|---|---|
 | `rx7600-rdna` | VIctory-RDNA | Series S; its `rdna-preset.json` base + fast (renderer patches, in-place buffers, residency); 5 GB texture cap (**recommended start**) |
