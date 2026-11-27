@@ -5,3 +5,7 @@
 # No GPU on the runner: D3D12 falls back to WARP, which does not reject a draw
 # outside the depth bounds (left 255, right 0). VIctory-RDNA 2c5a395.
 pipeline::host::tests::depth_bounds_pipeline_loads_and_filters_draws
+
+# A docs lint: README.md's launcher table names the placeholder
+# "VICTORY_NAME=value", which no source reads. Not game code.
+switches::documented_switches_are_read
