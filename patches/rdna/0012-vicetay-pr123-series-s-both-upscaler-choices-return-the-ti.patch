@@ -1,4 +1,4 @@
-From 8b61784cb5169ed8a74df17b288f051ea4845811 Mon Sep 17 00:00:00 2001
+From b8491d036c11fe23406f08fc1e128383e62a19e1 Mon Sep 17 00:00:00 2001
 From: Geckomacabre <91030858+Geckomacabre@users.noreply.github.com>
 Date: Thu, 26 Nov 2026 22:03:06 -0500
 Subject: [PATCH] Series S: both upscaler choices return the title's own
@@ -28,12 +28,12 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
  3 files changed, 90 insertions(+), 8 deletions(-)
 
 diff --git a/apps/victory/src/run.rs b/apps/victory/src/run.rs
-index 153082f..e14e948 100644
+index e4d55bf..60a51bf 100644
 --- a/apps/victory/src/run.rs
 +++ b/apps/victory/src/run.rs
-@@ -56,10 +56,15 @@ pub fn run(
+@@ -61,10 +61,15 @@ pub fn run(
      let original = std::fs::read(exe).with_context(|| format!("reading {}", exe.display()))?;
-     let prepared = victory_loader::prepare(&original)?;
+     let mut prepared = victory_loader::prepare(&original)?;
      let hash = prepared.original_hash.to_hex();
 -    match victory_game::identify(&hash) {
 +    let build = victory_game::identify(&hash);
@@ -48,8 +48,8 @@ index 153082f..e14e948 100644
  
      let images = cfg.cache_subdir("images")?;
      victory_hle::modules::d3d12x::use_shader_cache(cfg.cache_subdir("shaders")?);
-@@ -210,7 +215,7 @@ pub fn run(
-     if execute {
+@@ -244,7 +249,7 @@ pub fn run(
+     if execute && fsr.is_none() {
          let size = image.info().size_of_image as usize;
          // SAFETY: the image stays mapped and nothing of it has run yet.
 -        unsafe { victory_loader::resolution::apply_asked(image.base(), size) };
@@ -57,7 +57,7 @@ index 153082f..e14e948 100644
      }
      if !execute {
          println!("not executing (pass --execute to start the title)");
-@@ -517,10 +522,33 @@ impl LoaderLock {
+@@ -551,10 +556,33 @@ impl LoaderLock {
      }
  }
  
