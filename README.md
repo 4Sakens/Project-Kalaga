@@ -70,6 +70,13 @@ working end to end is the pipeline: validate the dump → detect the machine →
 build the runtime → stage DXC → launch the original executable → capture
 evidence and a diagnostic report.
 
+## Which runtime for this PC
+
+For the RX 7600 / 32 GiB machine, the pick is **Belobug/VIctory-Belobug-AMD**
+(the fastest public AMD code, ~22 fps upstream on a 7900 XTX vs ~4 fps on our
+fork base) with the Series S profile. `python -m kalaga presets` lists the
+launch presets; why and how to set it up: [docs/hardware-pick.md](docs/hardware-pick.md).
+
 ## Quick start
 
 ```powershell
@@ -78,6 +85,7 @@ python -m kalaga doctor                    # hardware + toolchain
 python -m kalaga validate                  # dump identity, archives, manifest
 python -m kalaga plan                      # what can run, and what blocks it
 python -m kalaga build                     # builds the selected runtime
+python -m kalaga presets                   # console + switch sets per PC
 python -m kalaga launch --dry-run          # exact command + env
 python -m kalaga launch                    # run the title
 python -m kalaga report --out report.json  # one JSON with everything
@@ -137,6 +145,7 @@ ZZ-box/                       (github.com/4Sakens/Project-Kalaga)
 │   ├── pc-test.md            mouse-look, Esc, loading-video fix, fps switches
 │   ├── graphics-plan.md      ordered plan for the black shadows and graphics
 │   ├── related-work.md       survey of the other projects and forks
+│   ├── hardware-pick.md      runtime + presets for the RX 7600 / 32 GiB PC
 │   └── integration.md        the four-effort merge plan
 ├── fivestar/                 FiveStar Recomp (submodule)
 ├── xbox2windows/             Xbox2Windows (submodule)

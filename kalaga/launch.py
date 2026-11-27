@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import doctor, gamefs, util
+from . import doctor, gamefs, presets, util
 from .config import Config
 from .plan import Assessment
 
@@ -88,9 +88,15 @@ def compose(assessment: Assessment, scan: gamefs.GameScan, cfg: Config) -> Launc
     notes: list[str] = []
     cwd = str(Path(assessment.executable).parent)
 
+    preset = presets.get(cfg.launch.preset) if cfg.launch.preset else None
+
     if assessment.runtime == "victory":
+        console = cfg.launch.console or (preset.console if preset else "") or "series-x"
         argv = [str(assessment.executable), "run", title, "--execute"]
-        argv += ["--console", cfg.launch.console]
+        argv += ["--console", console]
+        if preset:
+            env.update(presets.environment(preset))
+            notes.append(f"preset {preset.name}: {preset.summary}")
         if cfg.launch.log:
             env["VICTORY_LOG"] = cfg.launch.log
         if cfg.launch.warp:
@@ -107,6 +113,8 @@ def compose(assessment: Assessment, scan: gamefs.GameScan, cfg: Config) -> Launc
             cwd = str(Path(cfg.runtime.victory_dir))
         argv += cfg.launch.extra_args
     else:
+        if preset:
+            notes.append(f"preset {preset.name} ignored: it is for the victory runtime")
         argv = [str(assessment.executable), "run", str(scan.directory)]
         if cfg.launch.log:
             env["XCL_LOG"] = cfg.launch.log

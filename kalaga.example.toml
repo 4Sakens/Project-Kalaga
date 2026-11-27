@@ -35,7 +35,10 @@ profile = 'release'
 dxc_dir = 'D:\projectz-deps\dxc'
 
 [launch]
-console = 'series-x'      # series-x | series-s
+# Named console + switch set (`python -m kalaga presets`; docs/hardware-pick.md).
+# For the Belobug runtime on an RX 7600: 'rx7600-belobug'.
+preset = ''
+console = ''              # series-x | series-s; empty = the preset's, else series-x
 warp = false              # true = D3D12 software adapter (diagnostics only)
 log = 'info'              # VICTORY_LOG value
 timeout = 0               # seconds; 0 waits for the title to exit

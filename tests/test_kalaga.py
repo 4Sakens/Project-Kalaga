@@ -344,6 +344,45 @@ class LaunchTests(TempCase):
         self.assertEqual(result.env["VICTORY_GPU_TIMING"], "1")
         self.assertEqual(result.argv[-1], "--strict")
 
+    def test_preset_sets_console_and_switches(self) -> None:
+        cfg, scan, assessment = self._setup()
+        cfg.launch.preset = "rx7600-belobug-fast"
+        result = launch.compose(assessment, scan, cfg)
+        self.assertEqual(result.argv[result.argv.index("--console") + 1], "series-s")
+        self.assertEqual(result.env["VICTORY_PORT_DESCRIPTORS"], "1")
+        self.assertEqual(result.env["VICTORY_TEXTURE_ROOM_PERCENT"], "85")
+        self.assertTrue(any("rx7600-belobug-fast" in note for note in result.notes))
+
+    def test_explicit_console_and_extra_env_beat_the_preset(self) -> None:
+        cfg, scan, assessment = self._setup()
+        cfg.launch.preset = "rx7600-belobug"
+        cfg.launch.console = "series-x"
+        cfg.launch.extra_env = {"VICTORY_TEXTURE_ROOM_PERCENT": "80"}
+        result = launch.compose(assessment, scan, cfg)
+        self.assertEqual(result.argv[result.argv.index("--console") + 1], "series-x")
+        self.assertEqual(result.env["VICTORY_TEXTURE_ROOM_PERCENT"], "80")
+
+    def test_fork_preset_carries_the_amd_skips(self) -> None:
+        cfg, scan, assessment = self._setup()
+        cfg.launch.preset = "rx7600-fork"
+        result = launch.compose(assessment, scan, cfg)
+        skips = result.env["VICTORY_SKIP_PIPELINES"].split(",")
+        self.assertEqual(len(skips), 43)
+        self.assertNotIn("VICTORY_PORT_CBV", result.env)
+
+    def test_unknown_preset_is_an_error(self) -> None:
+        cfg, scan, assessment = self._setup()
+        cfg.launch.preset = "rx9999"
+        with self.assertRaises(RuntimeError):
+            launch.compose(assessment, scan, cfg)
+
+    def test_preset_is_read_from_config(self) -> None:
+        path = self.root / "kalaga.toml"
+        path.write_text("[launch]\npreset = 'rx7600-belobug'\n", encoding="utf-8")
+        cfg = config.load(path)
+        self.assertEqual(cfg.launch.preset, "rx7600-belobug")
+        self.assertEqual(cfg.launch.console, "")
+
     def test_stage_dependencies_copies_dxc_once(self) -> None:
         cfg, scan, assessment = self._setup()
         dxc = self.root / "dxc"
