@@ -566,6 +566,15 @@ if __name__ == "__main__":  # pragma: no cover
     unittest.main()
 
 
+class PrepareTests(unittest.TestCase):
+    def test_fresh_cache_warm_failure_is_recognised(self) -> None:
+        from kalaga import cli
+        out = ("Error: opening C:\\Users\\x\\AppData\\Local\\victory\\cache\\pipelines\\warm-done.txt\n\n"
+               "Caused by:\n    The system cannot find the path specified. (os error 3)")
+        self.assertTrue(cli._fresh_cache_warm_failure(out))
+        self.assertFalse(cli._fresh_cache_warm_failure("Error: device removed (0x887A0005)"))
+
+
 class UpstreamPatchTests(unittest.TestCase):
     """kalaga patches: one bad patch is backed out, the rest still go in."""
 

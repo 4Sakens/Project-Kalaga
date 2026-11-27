@@ -1,0 +1,111 @@
+From 990da670e33d2cd6346a202041a17611b196b144 Mon Sep 17 00:00:00 2001
+From: Jackster <1049919+Jackster@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 02:49:30 +0000
+Subject: [PATCH] warm: create the pipelines folder on a fresh cache
+
+README tells new users to run `victory warm --used` before their first
+run. On a cache the title has never written to, <cache>\pipelines does
+not exist: folder() derived it from cache_subdir("shaders"), which only
+creates <cache>\shaders, then run() opened warm-done.txt and the other
+book files inside the missing folder and failed with os error 3.
+
+Create the folder in folder(), with a context naming the path. Zero
+known pipelines now exits 0, prints "0 pipelines known ... 0 to make",
+and leaves the empty pipelines folder and book files behind, as the
+README's ordering expects. The in-game recorder is unchanged.
+
+Add warm_creates_the_missing_pipelines_folder to warm_bad.rs: it starts
+from a cache with no pipelines folder, runs warm --limit 0, checks the
+folder and warm-done.txt are created, then that a second warm --used run
+succeeds. It fails before this change with the same os error 3.
+
+README: say that `shaders` is the step that helps before a first run and
+that `warm` needs pipelines from an earlier run on the same driver, since
+a fresh cache has none to make.
+---
+ README.md                      |  7 ++++++-
+ apps/victory/src/warm.rs       |  5 ++++-
+ apps/victory/tests/warm_bad.rs | 27 +++++++++++++++++++++++++++
+ 3 files changed, 37 insertions(+), 2 deletions(-)
+
+diff --git a/README.md b/README.md
+index ef201af..9031880 100644
+--- a/README.md
++++ b/README.md
+@@ -129,13 +129,18 @@ name, PCI vendor and device IDs, and dedicated VRAM. Set
+ name to select it explicitly. With the launcher, pass
+ `-More @{VICTORY_D3D12_ADAPTER='NVIDIA'}`.
+ 
+-Before the first run, ahead of time (both can be stopped and go on later):
++Before a run, ahead of time (both can be stopped and go on later):
+ 
+ ```powershell
+ target\diag\victory.exe shaders <the shader archives>   # every shader translated, minutes
+ target\diag\victory.exe warm --used                     # pipelines earlier runs drew with, for a new driver or build
+ ```
+ 
++`shaders` is the step that helps before a first run; `warm` needs an earlier run
++on the same driver to have pipelines to make, so on a fresh cache it reports
++`0 pipelines known` and does nothing (it still creates the cache's `pipelines`
++folder).
++
+ Commands, debugging switches and upstream's own description:
+ [docs/README-fxceless.md](docs/README-fxceless.md). Every `VICTORY_...` switch is
+ described in a comment where it is read.
+diff --git a/apps/victory/src/warm.rs b/apps/victory/src/warm.rs
+index e85fe76..1e111f2 100644
+--- a/apps/victory/src/warm.rs
++++ b/apps/victory/src/warm.rs
+@@ -23,7 +23,10 @@ const SLOW_MS: f64 = 1000.0;
+ 
+ fn folder() -> Result<PathBuf> {
+     let cfg = victory_core::Config::load()?;
+-    Ok(cfg.cache_subdir("shaders")?.with_file_name("pipelines"))
++    let dir = cfg.cache_subdir("shaders")?.with_file_name("pipelines");
++    // The recorder makes this folder during a run; `warm` comes first.
++    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
++    Ok(dir)
+ }
+ 
+ fn select_pipelines(
+diff --git a/apps/victory/tests/warm_bad.rs b/apps/victory/tests/warm_bad.rs
+index 5b9c155..c16317f 100644
+--- a/apps/victory/tests/warm_bad.rs
++++ b/apps/victory/tests/warm_bad.rs
+@@ -41,6 +41,33 @@ fn parse_fingerprint(stdout: &str) -> String {
+     fp.to_owned()
+ }
+ 
++/// `warm` may run on a cache no title run has written to: nothing has made
++/// `cache\pipelines` yet, so `warm` has to, and there is nothing to make.
++#[test]
++fn warm_creates_the_missing_pipelines_folder() {
++    let root = tempfile::tempdir().unwrap();
++    let cache = root.path().join("cache");
++    let pipelines = cache.join("pipelines");
++    assert!(!pipelines.exists(), "a fresh cache has no pipelines folder");
++
++    let first = run_warm(root.path(), &cache, &[], &["--limit", "0"]);
++    assert!(
++        first.contains("0 pipelines known, 0 made before") && first.contains("0 to make"),
++        "{first}"
++    );
++    assert!(
++        pipelines.is_dir(),
++        "warm creates the folder its files live in"
++    );
++    assert!(
++        pipelines.join("warm-done.txt").is_file(),
++        "and the book files it appends to"
++    );
++
++    let second = run_warm(root.path(), &cache, &[], &["--limit", "0", "--used"]);
++    assert!(second.contains("made before"), "{second}");
++}
++
+ #[test]
+ fn warm_bad_fingerprint_override_again_and_help() {
+     let help = Command::new(env!("CARGO_BIN_EXE_victory"))
+-- 
+2.43.0
+

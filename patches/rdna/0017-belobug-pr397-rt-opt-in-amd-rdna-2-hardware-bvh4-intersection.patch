@@ -1,0 +1,1541 @@
+From 29ed1458328aad7240a89844f3bb85cdfa2e5fcb Mon Sep 17 00:00:00 2001
+From: zhu1025960209-web <255052750+zhu1025960209-web@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 07:42:24 +0800
+Subject: [PATCH] RT: add opt-in AMD RDNA 2+ hardware BVH4 intersection
+ (VICTORY_HW_BVH=1)
+
+Adapt MeMako's upstream hardware BVH4 ray-node intersection design
+(Marvisak/VIctory#3294, 8c919e6) onto the flat 1-level VRAM-side
+memory.rs directory, gated behind opt-in VICTORY_HW_BVH=1 (off by default):
+
+- Enable IAmdExtD3DShaderIntrinsics::IntersectBvhNode (opcode 0x22) via
+  amdxc64.dll on verified AMD DXR-capable hardware adapters (CheckSupport
+  0x19 on RDNA 2/3, 0x0D fallback on RDNA 4), with silent software
+  fallback on non-AMD GPUs, WARP, or unsupported drivers.
+- Add SLOT_MEMORY_VAS (t252, space1) parallel 16 MiB VRAM-side 64-bit
+  host GPU VA page table in memory.rs (allocated only when active) and
+  SLOT_AMD_EXT (u0, space2147420894) magic UAV bindings across shader
+  emission, pipeline root-signature construction, and draw/dispatch.
+- Lower image_bvh*_intersect_ray through IntersectBvhNode with per-lane
+  software fallback (and SLOT_FAULTS recording) for unmapped, out-of-
+  directory, partial, unaligned, or page-straddling nodes.
+- Mix VICTORY_HW_BVH=1 and the active opcode into shader_cache's build
+  key only when active, leaving the default software cache 100% intact.
+- Add DXIL validation, live GPU correctness (bvh64-sorted, bvh32-sorted,
+  bvh32-unsorted), throughput microbenchmark, and page_va unit tests.
+
+AI-assisted (Antigravity).
+---
+ crates/victory-gpu/src/draw.rs                |  39 ++
+ crates/victory-gpu/src/host.rs                |  29 +-
+ crates/victory-gpu/src/memory.rs              | 102 ++++-
+ crates/victory-gpu/src/pipeline/host.rs       |  14 +-
+ crates/victory-gpu/src/shader_cache.rs        |   5 +
+ crates/victory-shader/src/emit/host.rs        | 218 +++++++++-
+ crates/victory-shader/src/emit/intersect.rs   | 215 +++++++++-
+ .../src/emit/intersect_tests.rs               | 406 ++++++++++++++++++
+ crates/victory-shader/src/emit/lower.rs       |  46 ++
+ crates/victory-shader/src/emit/mod.rs         |  14 +-
+ crates/victory-shader/src/emit/shader.rs      |  50 ++-
+ 11 files changed, 1121 insertions(+), 17 deletions(-)
+
+diff --git a/crates/victory-gpu/src/draw.rs b/crates/victory-gpu/src/draw.rs
+index 509c996..31416ad 100644
+--- a/crates/victory-gpu/src/draw.rs
++++ b/crates/victory-gpu/src/draw.rs
+@@ -1664,6 +1664,12 @@ impl State {
+             } else {
+                 None
+             };
++            if t.host.root_srvs.contains(&victory_shader::emit::SLOT_MEMORY_VAS)
++                && memory.as_ref().and_then(|m| m.vas).is_none()
++            {
++                once!("a hardware BVH shader dropped: no page VA table");
++                return false;
++            }
+             if let Some((param, dwords)) = stage.user_data {
+                 // (A root signature holds 64 dwords.)
+                 let mut room = [0u32; 64];
+@@ -1720,6 +1726,22 @@ impl State {
+                         }
+                         continue;
+                     }
++                    if srv && slot == victory_shader::emit::SLOT_MEMORY_VAS {
++                        // Ours: per-page host GPU virtual addresses for AMD
++                        // hardware BVH4 traversal.
++                        if let Some(vas) = memory.as_ref().and_then(|m| m.vas) {
++                            // SAFETY: an open list; the VA table lives as
++                            // long as the process and the list holds it.
++                            unsafe {
++                                if compute {
++                                    l.SetComputeRootShaderResourceView(param, vas);
++                                } else {
++                                    l.SetGraphicsRootShaderResourceView(param, vas);
++                                }
++                            }
++                        }
++                        continue;
++                    }
+                     if srv && slot == victory_shader::emit::SLOT_STRIDES {
+                         // Ours, not the title's: the shader picks buffers
+                         // from the view heap by an index it computes.
+@@ -1798,6 +1820,23 @@ impl State {
+                     }
+                     continue;
+                 }
++                if slot == victory_shader::emit::SLOT_AMD_EXT {
++                    // AMD's driver intercepts `u0, space2147420894` at PSO
++                    // compile time; passing the live `m.faults` VA satisfies
++                    // D3D12 root validation.
++                    if let Some(m) = &memory {
++                        // SAFETY: an open list; the faults buffer lives as
++                        // long as the process and the list holds it.
++                        unsafe {
++                            if compute {
++                                l.SetComputeRootUnorderedAccessView(param, m.faults);
++                            } else {
++                                l.SetGraphicsRootUnorderedAccessView(param, m.faults);
++                            }
++                        }
++                    }
++                    continue;
++                }
+                 let address = match self.roots_ref(compute).get(usize::from(slot)) {
+                     Some(&Root::View(address)) => Some(address),
+                     _ => {
+diff --git a/crates/victory-gpu/src/host.rs b/crates/victory-gpu/src/host.rs
+index fd4d49a..8d869ce 100644
+--- a/crates/victory-gpu/src/host.rs
++++ b/crates/victory-gpu/src/host.rs
+@@ -61,6 +61,10 @@ pub(crate) struct Host {
+     /// no sampler heap ([`fallback_heaps`]).
+     fallback_view: OnceLock<Option<ID3D12DescriptorHeap>>,
+     fallback_sampler: OnceLock<Option<ID3D12DescriptorHeap>>,
++    /// Active AMD D3D12 shader-intrinsics extension keeping hardware BVH
++    /// ray-node intersection enabled for the lifetime of `device`
++    /// (`VICTORY_HW_BVH=1`).
++    _amd_ext: Option<victory_shader::emit::host::AmdExtGuard>,
+ }
+ 
+ // SAFETY: D3D12 devices, queues, fences and descriptor heaps are
+@@ -1009,7 +1013,8 @@ fn create() -> windows::core::Result<Host> {
+         // Diagnostics: the software adapter, on which a shader's wild access
+         // is an access violation in this process (a crash report with the
+         // address and instruction) instead of a GPU fault and driver reset.
+-        if cfg!(feature = "diagnostics") && crate::switch::on("VICTORY_D3D12_WARP") {
++        let warp = cfg!(feature = "diagnostics") && crate::switch::on("VICTORY_D3D12_WARP");
++        if warp {
+             let adapter = warp_adapter()?;
+             D3D12CreateDevice(&adapter, D3D_FEATURE_LEVEL_12_0, &mut device)?;
+             tracing::info!("host device on the software adapter (WARP)");
+@@ -1019,6 +1024,27 @@ fn create() -> windows::core::Result<Host> {
+             crate::tdr::log();
+         }
+         let device = device.ok_or_else(windows::core::Error::empty)?;
++        let amd_ext = if !warp && victory_shader::emit::hw_bvh_switch() {
++            match victory_shader::emit::host::enable_amd_bvh(&device) {
++                Some(guard) => {
++                    victory_shader::emit::set_host_hw_bvh(guard.opcode);
++                    tracing::info!(
++                        opcode = format_args!("{:#04x}", guard.opcode),
++                        support = format_args!("{:#04x}", guard.support_code),
++                        "AMD hardware BVH ray-node intersection enabled (VICTORY_HW_BVH=1)"
++                    );
++                    Some(guard)
++                }
++                None => {
++                    tracing::warn!(
++                        "VICTORY_HW_BVH=1 requested, but AMD IntersectBvhNode extension is unavailable on this adapter; using software BVH"
++                    );
++                    None
++                }
++            }
++        } else {
++            None
++        };
+         // Before anything is made with it (`VICTORY_RECORD`).
+         #[cfg(feature = "diagnostics")]
+         crate::replay::record::from_env(&device);
+@@ -1120,6 +1146,7 @@ fn create() -> windows::core::Result<Host> {
+             adapter,
+             fallback_view: OnceLock::new(),
+             fallback_sampler: OnceLock::new(),
++            _amd_ext: amd_ext,
+         })
+     }
+ }
+diff --git a/crates/victory-gpu/src/memory.rs b/crates/victory-gpu/src/memory.rs
+index b030094..119a774 100644
+--- a/crates/victory-gpu/src/memory.rs
++++ b/crates/victory-gpu/src/memory.rs
+@@ -146,6 +146,9 @@ struct Packed {
+ struct Memory {
+     /// The CPU's entries (number, offset), and the copy shaders read.
+     directory: (*mut u32, Arc<Shadow>),
++    /// Parallel page GPU VA table (low, high) for AMD hardware BVH
++    /// (`VICTORY_HW_BVH=1`), allocated only when active.
++    vas: Option<(*mut u32, Arc<Shadow>)>,
+     faults: (ID3D12Resource, *mut u32, u64),
+     /// Copy `n` is `copies[n - 1]`.
+     copies: Vec<Arc<Shadow>>,
+@@ -214,6 +217,7 @@ static MEMORY: Mutex<Option<Memory>> = Mutex::new(None);
+ /// What a draw binds.
+ pub(crate) struct Ready {
+     pub(crate) directory: u64,
++    pub(crate) vas: Option<u64>,
+     pub(crate) faults: u64,
+     /// The view heap slot of the null view; copy `n`'s view is `n` further.
+     pub(crate) base: u32,
+@@ -227,6 +231,15 @@ impl Memory {
+         let entries = crate::upload::reserve(bytes as usize)?;
+         let directory = crate::shadow::by_address(entries as u64, bytes)?;
+         crate::host::name(&directory.buffer, || "title memory by address: directory".into());
++        let vas = if victory_shader::emit::host_hw_bvh_active() {
++            let entries = crate::upload::reserve(bytes as usize)?;
++            let shadow = crate::shadow::by_address(entries as u64, bytes)?;
++            crate::host::name(&shadow.buffer, || "title memory by address: page VAs".into());
++            tracing::info!("title memory by address: page VA table ready for AMD hardware BVH");
++            Some((entries as *mut u32, shadow))
++        } else {
++            None
++        };
+         let (faults, data) = host.shared_buffer(u64::from(MEMORY_FAULTS) * 4)?;
+         crate::host::name(&faults, || "title memory by address: faults".into());
+         // SAFETY: a fresh mapping of at least that many bytes.
+@@ -236,6 +249,7 @@ impl Memory {
+         tracing::info!("title memory by address: a shader reads or writes through raw addresses");
+         Some(Memory {
+             directory: (entries as *mut u32, directory),
++            vas,
+             faults: (faults, data.cast::<u32>(), gpu),
+             copies: Vec::new(),
+             numbers: HashMap::new(),
+@@ -268,6 +282,43 @@ impl Memory {
+         unsafe { self.directory.0.add(page as usize * 2) }
+     }
+ 
++    /// The VA table's entry of `page`, if AMD hardware BVH is active.
++    fn va_entry(&self, page: u64) -> Option<*mut u32> {
++        debug_assert!(page < u64::from(MEMORY_PAGES));
++        let (entries, _) = self.vas.as_ref()?;
++        // SAFETY: inside the VA table (`MEMORY_PAGES` entries of two dwords).
++        Some(unsafe { entries.add(page as usize * 2) })
++    }
++
++    /// Records the 64-bit host GPU virtual address for `page`, if the VA table
++    /// is active.
++    fn set_va(&self, page: u64, copy: usize, offset: u64) {
++        let Some(entry) = self.va_entry(page) else {
++            return;
++        };
++        let shadow = &self.copies[copy];
++        let (start, len) = shadow.span();
++        let va = page_va(shadow.gpu(start), len, offset);
++        // SAFETY: an entry of the VA table, under the mutex.
++        unsafe {
++            entry.add(1).write_volatile((va >> 32) as u32);
++            entry.write_volatile(va as u32);
++        }
++    }
++
++    /// Clears the host GPU virtual address for `page`, if the VA table is
++    /// active.
++    fn clear_va(&self, page: u64) {
++        let Some(entry) = self.va_entry(page) else {
++            return;
++        };
++        // SAFETY: an entry of the VA table, under the mutex.
++        unsafe {
++            entry.write_volatile(0);
++            entry.add(1).write_volatile(0);
++        }
++    }
++
+     /// The place in `copies` of the copy that holds `page`, if one does.
+     fn copy_of(&self, page: u64) -> Option<usize> {
+         if page >= u64::from(MEMORY_PAGES) {
+@@ -347,6 +398,7 @@ impl Memory {
+                     // SAFETY: an entry of the directory.
+                     if unsafe { entry.read() } == 0 {
+                         close(entry, n, at - first);
++                        self.set_va(at / PAGE, n, at - first);
+                     }
+                     at += PAGE;
+                 }
+@@ -354,6 +406,7 @@ impl Memory {
+             // SAFETY: as above.
+             if unsafe { self.entry(page).read() } == 0 {
+                 close(self.entry(page), n, start - shadow.span().0);
++                self.set_va(page, n, start - shadow.span().0);
+             }
+             return true;
+         }
+@@ -365,6 +418,7 @@ impl Memory {
+             {
+                 self.windows += 1;
+                 fill(self.entry(page), n, 0);
++                self.set_va(page, n, 0);
+                 return true;
+             }
+             return false;
+@@ -406,7 +460,9 @@ impl Memory {
+     fn hold(&mut self, page: u64, at: usize, copy: usize) {
+         self.pages.insert(page, Held { at, copy, taken: 0, looked: u64::MAX, born: self.frame, owners: 0, theirs: false });
+         self.order.push(page);
+-        fill(self.entry(page), copy, at as u64 - self.copies[copy].span().0);
++        let offset = at as u64 - self.copies[copy].span().0;
++        fill(self.entry(page), copy, offset);
++        self.set_va(page, copy, offset);
+     }
+ 
+     /// The packed structure at `address` is gone: the pages it alone had are
+@@ -421,6 +477,10 @@ impl Memory {
+                 self.pages.remove(&page);
+                 // SAFETY: an entry of the directory, under the mutex.
+                 unsafe { self.entry(page).write_volatile(0) };
++                self.clear_va(page);
++                if let Some(va_ptr) = self.va_entry(page) {
++                    crate::watch::wrote(va_ptr as usize, 8);
++                }
+             }
+         }
+         self.stats.gone += 1;
+@@ -626,6 +686,9 @@ impl Memory {
+         };
+         self.hold(page, at, copy);
+         crate::watch::wrote(self.entry(page) as usize, 8);
++        if let Some(va_ptr) = self.va_entry(page) {
++            crate::watch::wrote(va_ptr as usize, 8);
++        }
+         self.take(page, 0, PAGE as usize, true);
+         true
+     }
+@@ -746,6 +809,10 @@ impl Memory {
+     fn bring_up(&self, list: &HostList) {
+         let (start, len) = self.directory.1.span();
+         self.directory.1.refresh(list, start, len);
++        if let Some((_, vas)) = &self.vas {
++            let (start, len) = vas.span();
++            vas.refresh(list, start, len);
++        }
+         for shadow in &self.copies {
+             let (start, len) = shadow.span();
+             shadow.refresh(list, start, len);
+@@ -856,6 +923,20 @@ fn fill(entry: *mut u32, n: usize, offset: u64) {
+     }
+ }
+ 
++/// Host GPU virtual address of a whole 64 KiB page at `offset` in a copy
++/// starting at `copy_gpu_start` of length `copy_len`, or `0` if the page is
++/// partial, overflows, is unaligned for 64-byte BVH nodes, or resolves to 0.
++fn page_va(copy_gpu_start: u64, copy_len: u64, offset: u64) -> u64 {
++    if !offset.checked_add(PAGE).is_some_and(|end| end <= copy_len) {
++        return 0;
++    }
++    let va = copy_gpu_start.wrapping_add(offset);
++    if va == 0 || va & 63 != 0 {
++        return 0;
++    }
++    va
++}
++
+ /// The bytes of a packed structure whose first two dwords these are: the
+ /// version (6) with the marks of a bottom level and of one that is packed,
+ /// and its size unpacked in 64-byte nodes.
+@@ -1065,6 +1146,7 @@ pub(crate) fn ready(
+     let directory = &m.directory.1;
+     Some(Ready {
+         directory: directory.gpu(directory.span().0),
++        vas: m.vas.as_ref().map(|(_, v)| v.gpu(v.span().0)),
+         faults: m.faults.2,
+         base,
+     })
+@@ -1301,4 +1383,22 @@ mod tests {
+         assert_eq!(packed_len(header(0x8102_0006, 0)), None);
+         assert_eq!(packed_len(header(0x8102_0006, 1 << 21)), None);
+     }
++
++    #[test]
++    fn page_va_requires_whole_aligned_page() {
++        let base = 0x1_0000_0000u64;
++        // Whole 64 KiB pages aligned to 64 bytes yield their host GPU VA.
++        assert_eq!(page_va(base, 2 * PAGE, 0), base);
++        assert_eq!(page_va(base, 2 * PAGE, PAGE), base + PAGE);
++        assert_eq!(page_va(base, PAGE + 64, 64), base + 64);
++        // Partial or overflowing pages fall back to 0.
++        assert_eq!(page_va(base, PAGE - 1, 0), 0);
++        assert_eq!(page_va(base, PAGE + 64, 128), 0);
++        assert_eq!(page_va(base, 2 * PAGE, u64::MAX), 0);
++        // Unaligned pages (< 64-byte alignment) fall back to 0.
++        assert_eq!(page_va(base + 32, 2 * PAGE, 0), 0);
++        assert_eq!(page_va(base, 2 * PAGE, 32), 0);
++        // Zero VA falls back to 0.
++        assert_eq!(page_va(0, PAGE, 0), 0);
++    }
+ }
+diff --git a/crates/victory-gpu/src/pipeline/host.rs b/crates/victory-gpu/src/pipeline/host.rs
+index a797204..d72902c 100644
+--- a/crates/victory-gpu/src/pipeline/host.rs
++++ b/crates/victory-gpu/src/pipeline/host.rs
+@@ -522,12 +522,15 @@ impl HostPipeline {
+                     let uav = kind == D3D12_ROOT_PARAMETER_TYPE_UAV;
+                     // Ours, not the title's, stay root descriptors: the
+                     // table of strides, the directory of title memory by
+-                    // address and its fault notes.
++                    // address, its page VA table, its fault notes, and AMD's
++                    // shader-intrinsics magic UAV.
+                     let ours = if uav {
+                         slot == victory_shader::emit::SLOT_FAULTS
++                            || slot == victory_shader::emit::SLOT_AMD_EXT
+                     } else {
+                         slot == victory_shader::emit::SLOT_STRIDES
+                             || slot == victory_shader::emit::SLOT_MEMORY
++                            || slot == victory_shader::emit::SLOT_MEMORY_VAS
+                     };
+                     if (uav || kind == D3D12_ROOT_PARAMETER_TYPE_SRV) && !ours && bounded_root_srvs() {
+                         // A one-view table: the view's size bounds the
+@@ -561,13 +564,18 @@ impl HostPipeline {
+                         });
+                         continue;
+                     }
++                    let (register, space) = if uav && slot == victory_shader::emit::SLOT_AMD_EXT {
++                        (0, victory_shader::emit::AMD_EXT_SPACE)
++                    } else {
++                        (u32::from(slot), ROOT_CBV_SPACE)
++                    };
+                     out.push((slot, params.len() as u32));
+                     params.push(D3D12_ROOT_PARAMETER1 {
+                         ParameterType: kind,
+                         Anonymous: D3D12_ROOT_PARAMETER1_0 {
+                             Descriptor: D3D12_ROOT_DESCRIPTOR1 {
+-                                ShaderRegister: u32::from(slot),
+-                                RegisterSpace: ROOT_CBV_SPACE,
++                                ShaderRegister: register,
++                                RegisterSpace: space,
+                                 Flags: D3D12_ROOT_DESCRIPTOR_FLAG_DATA_VOLATILE,
+                             },
+                         },
+diff --git a/crates/victory-gpu/src/shader_cache.rs b/crates/victory-gpu/src/shader_cache.rs
+index 6052513..ba58e4c 100644
+--- a/crates/victory-gpu/src/shader_cache.rs
++++ b/crates/victory-gpu/src/shader_cache.rs
+@@ -146,6 +146,11 @@ fn build() -> [u8; 32] {
+     for value in victory_shader::emit::host_settings() {
+         hash.update(&value.to_le_bytes());
+     }
++    let hw_bvh = victory_shader::emit::host_hw_bvh_opcode();
++    if hw_bvh != 0 {
++        hash.update(b"VICTORY_HW_BVH=1");
++        hash.update(&[hw_bvh]);
++    }
+     *hash.finalize().as_bytes()
+ }
+ 
+diff --git a/crates/victory-shader/src/emit/host.rs b/crates/victory-shader/src/emit/host.rs
+index 22e43d8..664cf66 100644
+--- a/crates/victory-shader/src/emit/host.rs
++++ b/crates/victory-shader/src/emit/host.rs
+@@ -17,6 +17,168 @@ pub struct Host {
+     pub device: ID3D12Device,
+ }
+ 
++/// Active AMD D3D12 shader-intrinsics extension (`IAmdExtD3DShaderIntrinsics`)
++/// keeping hardware BVH ray-node intersection (`IntersectBvhNode`) enabled for
++/// the lifetime of its `ID3D12Device`.
++pub struct AmdExtGuard {
++    /// Opcode to emit in the magic UAV atomic phases (`0x22` for
++    /// `IntersectBvhNode`).
++    pub opcode: u8,
++    /// `CheckSupport` capability code that succeeded (`0x19` for
++    /// `IntersectBvhNode` on RDNA 2/3, or `0x0D` on RDNA 4).
++    pub support_code: u32,
++    intrinsics: *mut std::ffi::c_void,
++    factory: *mut std::ffi::c_void,
++}
++
++// SAFETY: AMD D3D12 extension COM interfaces are device-scoped and released
++// only on drop; the pointers are never dereferenced concurrently.
++unsafe impl Send for AmdExtGuard {}
++// SAFETY: as above.
++unsafe impl Sync for AmdExtGuard {}
++
++impl Drop for AmdExtGuard {
++    fn drop(&mut self) {
++        // SAFETY: `intrinsics` and `factory` are valid COM `IUnknown*` pointers
++        // obtained from `AmdExtD3DCreateInterface` / `CreateInterface`.
++        unsafe {
++            type ReleaseFn = unsafe extern "system" fn(*mut std::ffi::c_void) -> u32;
++            let release = |obj: *mut std::ffi::c_void| {
++                if !obj.is_null() {
++                    let vtbl = *(obj as *const *const usize);
++                    let f: ReleaseFn = std::mem::transmute(*vtbl.add(2));
++                    f(obj);
++                }
++            };
++            release(self.intrinsics);
++            release(self.factory);
++        }
++    }
++}
++
++/// Enables AMD's D3D12 `IntersectBvhNode` hardware ray-node intersection shader
++/// intrinsic on `device` via the already-loaded `amdxc64.dll` driver module.
++///
++/// Returns `None` on non-AMD GPUs, WARP, or drivers without hardware BVH
++/// intrinsic support so callers fall back silently to software emulation.
++pub fn enable_amd_bvh(device: &ID3D12Device) -> Option<AmdExtGuard> {
++    use windows::core::{GUID, HRESULT};
++    use windows_sys::Win32::System::LibraryLoader::{GetModuleHandleA, GetProcAddress};
++
++    // IID_IAmdExtD3DFactory: {014937EC-9288-446F-A9AC-D75A8E3A984F}
++    const IID_FACTORY: GUID = GUID::from_u128(0x0149_37EC_9288_446F_A9AC_D75A_8E3A_984F);
++    // IID_IAmdExtD3DShaderIntrinsics: {BA019D53-CCAB-4CBD-B56A-7230ED4330AD}
++    const IID_INTRINSICS: GUID = GUID::from_u128(0xBA01_9D53_CCAB_4CBD_B56A_7230_ED43_30AD);
++    const SUPPORT_INTERSECT_INTERNAL: u32 = 0x0D;
++    const SUPPORT_INTERSECT_BVH_NODE: u32 = 0x19;
++    const OPCODE_INTERSECT_BVH_NODE: u8 = 0x22;
++
++    type CreateFactoryFn = unsafe extern "C" fn(
++        *mut std::ffi::c_void,
++        *const GUID,
++        *mut *mut std::ffi::c_void,
++    ) -> HRESULT;
++    type CreateInterfaceFn = unsafe extern "system" fn(
++        *mut std::ffi::c_void,
++        *mut std::ffi::c_void,
++        *const GUID,
++        *mut *mut std::ffi::c_void,
++    ) -> HRESULT;
++    type CheckSupportFn = unsafe extern "system" fn(*mut std::ffi::c_void, u32) -> HRESULT;
++    type EnableFn = unsafe extern "system" fn(*mut std::ffi::c_void) -> HRESULT;
++    type ReleaseFn = unsafe extern "system" fn(*mut std::ffi::c_void) -> u32;
++
++    // SAFETY: queries DXGI/D3D12 feature support on `device`, then resolves
++    // `amdxc64.dll` (already loaded by the AMD D3D12 driver on a verified AMD
++    // hardware RT adapter); all vtable slots follow the published AMD AGS /
++    // `AmdExtD3D` COM ABI.
++    unsafe {
++        // Guard against mixed-GPU systems where `amdxc64.dll` may already be
++        // loaded in-process: never hand a foreign or software `ID3D12Device`
++        // to `AmdExtD3DCreateInterface`.
++        let desc = adapter_desc(device).ok()?;
++        if desc.VendorId != 0x1002 || software(&desc) {
++            return None;
++        }
++        // Require hardware ray-tracing support (DXR tier >= 1.0, i.e. RDNA 2+)
++        // so pre-RDNA 2 AMD GPUs (GCN / RDNA 1) cannot pass the 0x0D fallback.
++        let mut opts5 = D3D12_FEATURE_DATA_D3D12_OPTIONS5::default();
++        if device
++            .CheckFeatureSupport(
++                D3D12_FEATURE_D3D12_OPTIONS5,
++                (&raw mut opts5).cast(),
++                size_of_val(&opts5) as u32,
++            )
++            .is_err()
++            || opts5.RaytracingTier.0 < D3D12_RAYTRACING_TIER_1_0.0
++        {
++            return None;
++        }
++
++        let hmod = GetModuleHandleA(c"amdxc64.dll".as_ptr().cast());
++        if hmod.is_null() {
++            return None;
++        }
++        let proc = GetProcAddress(hmod, c"AmdExtD3DCreateInterface".as_ptr().cast())?;
++        let create_factory: CreateFactoryFn = std::mem::transmute(proc);
++
++        let dev_ptr = device.as_raw();
++        let mut factory: *mut std::ffi::c_void = std::ptr::null_mut();
++        if create_factory(dev_ptr, &IID_FACTORY, &mut factory).is_err() || factory.is_null() {
++            return None;
++        }
++        let release = |obj: *mut std::ffi::c_void| {
++            let vtbl = *(obj as *const *const usize);
++            let f: ReleaseFn = std::mem::transmute(*vtbl.add(2));
++            f(obj);
++        };
++
++        // IAmdExtD3DFactory::CreateInterface is vtable slot 3 (after IUnknown).
++        let f_vtbl = *(factory as *const *const usize);
++        let create_iface: CreateInterfaceFn = std::mem::transmute(*f_vtbl.add(3));
++        let mut intrinsics: *mut std::ffi::c_void = std::ptr::null_mut();
++        if create_iface(factory, dev_ptr, &IID_INTRINSICS, &mut intrinsics).is_err()
++            || intrinsics.is_null()
++        {
++            release(factory);
++            return None;
++        }
++
++        // IAmdExtD3DShaderIntrinsics: CheckSupport is slot 4, Enable is slot 5.
++        let i_vtbl = *(intrinsics as *const *const usize);
++        let check_support: CheckSupportFn = std::mem::transmute(*i_vtbl.add(4));
++        let enable: EnableFn = std::mem::transmute(*i_vtbl.add(5));
++
++        // RDNA 2/3 drivers report S_OK for 0x19 (IntersectBvhNode); RDNA 4
++        // drivers report E_NOINTERFACE for 0x19 while reporting S_OK for 0x0D
++        // and compiling opcode 0x22 natively to hardware BVH4 intersection.
++        let support_code = if check_support(intrinsics, SUPPORT_INTERSECT_BVH_NODE) == HRESULT(0) {
++            Some(SUPPORT_INTERSECT_BVH_NODE)
++        } else if check_support(intrinsics, SUPPORT_INTERSECT_INTERNAL) == HRESULT(0) {
++            Some(SUPPORT_INTERSECT_INTERNAL)
++        } else {
++            None
++        };
++        let Some(support_code) = support_code else {
++            release(intrinsics);
++            release(factory);
++            return None;
++        };
++        if enable(intrinsics).is_err() {
++            release(intrinsics);
++            release(factory);
++            return None;
++        }
++
++        Some(AmdExtGuard {
++            opcode: OPCODE_INTERSECT_BVH_NODE,
++            support_code,
++            intrinsics,
++            factory,
++        })
++    }
++}
++
+ /// What the stage declares that a pipeline must match.
+ fn sig(dxil: &[u8], fourcc: FourCC) -> Result<Vec<SigElement>, String> {
+     let c = Container::parse(dxil).map_err(|e| e.to_string())?;
+@@ -297,6 +459,11 @@ impl Host {
+         views.sort_unstable();
+         views.dedup();
+         for (slot, kind) in views {
++            let (register, space) = if kind == 2 && slot == super::SLOT_AMD_EXT {
++                (0, super::AMD_EXT_SPACE)
++            } else {
++                (u32::from(slot), super::ROOT_CBV_SPACE)
++            };
+             params.push(D3D12_ROOT_PARAMETER1 {
+                 ParameterType: match kind {
+                     1 => D3D12_ROOT_PARAMETER_TYPE_SRV,
+@@ -305,8 +472,8 @@ impl Host {
+                 },
+                 Anonymous: D3D12_ROOT_PARAMETER1_0 {
+                     Descriptor: D3D12_ROOT_DESCRIPTOR1 {
+-                        ShaderRegister: u32::from(slot),
+-                        RegisterSpace: super::ROOT_CBV_SPACE,
++                        ShaderRegister: register,
++                        RegisterSpace: space,
+                         Flags: D3D12_ROOT_DESCRIPTOR_FLAG_NONE,
+                     },
+                 },
+@@ -758,6 +925,15 @@ pub enum Root {
+         srv: bool,
+         data: Vec<u32>,
+     },
++    /// A root raw UAV of this many dwords, zeroed ([`Host::dispatch`] only).
++    Uav(u32),
++    /// A flat [`super::MEMORY_PAGES`] page VA table with whole 64 KiB pages
++    /// starting at `first_page` mapped to the GPU virtual address of heap view
++    /// `view_index` ([`Host::dispatch`] only).
++    MemoryVaTable {
++        first_page: usize,
++        view_index: usize,
++    },
+ }
+ 
+ /// Bindings for [`Host::draw`]: root arguments and the heap contents.
+@@ -995,7 +1171,9 @@ impl Host {
+                         at.ptr += (index * size) as u64;
+                         list.SetGraphicsRootDescriptorTable(*param, at);
+                     }
+-                    Root::View { .. } => return Err("root views in a draw".into()),
++                    Root::View { .. } | Root::Uav(_) | Root::MemoryVaTable { .. } => {
++                        return Err("root views in a draw".into());
++                    }
+                 }
+             }
+             list.OMSetRenderTargets(1, Some(&rtv), false, None);
+@@ -1291,6 +1469,7 @@ impl Host {
+             let sampler_size =
+                 dev.GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER) as usize;
+             let mut keep = Vec::new();
++            let mut view_gpu: Vec<Option<(u64, u64)>> = vec![None; d.views.len()];
+             // UAVs: (resource, dwords or texture size, readback buffer).
+             let mut uavs = Vec::new();
+             for (i, v) in d.views.iter().enumerate() {
+@@ -1495,6 +1674,7 @@ impl Host {
+                             },
+                         };
+                         dev.CreateShaderResourceView(&b, Some(&desc), at);
++                        view_gpu[i] = Some((b.GetGPUVirtualAddress(), (data.len() * 4) as u64));
+                         keep.push(b);
+                     }
+                 }
+@@ -1534,6 +1714,38 @@ impl Host {
+                         }
+                         keep.push(b);
+                     }
++                    &Root::Uav(n) => {
++                        let bytes = (u64::from(n) * 4).max(256);
++                        let b = make(
++                            D3D12_HEAP_TYPE_DEFAULT,
++                            &buffer(bytes, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS),
++                            D3D12_RESOURCE_STATE_COMMON,
++                        )?;
++                        list.SetComputeRootUnorderedAccessView(*param, b.GetGPUVirtualAddress());
++                        keep.push(b);
++                    }
++                    &Root::MemoryVaTable {
++                        first_page,
++                        view_index,
++                    } => {
++                        let (va, len) = view_gpu
++                            .get(view_index)
++                            .and_then(|v| *v)
++                            .ok_or("MemoryVaTable requires a View::Buffer at view_index")?;
++                        let mut table = vec![0u32; super::MEMORY_PAGES as usize * 2];
++                        let pages = (len / 0x1_0000) as usize;
++                        for p in 0..pages {
++                            let entry = first_page + p;
++                            if entry + 1 < super::MEMORY_PAGES as usize {
++                                let page_va = va + (p as u64) * 0x1_0000;
++                                table[2 * entry] = page_va as u32;
++                                table[2 * entry + 1] = (page_va >> 32) as u32;
++                            }
++                        }
++                        let b = upload(&table)?;
++                        list.SetComputeRootShaderResourceView(*param, b.GetGPUVirtualAddress());
++                        keep.push(b);
++                    }
+                 }
+             }
+             let [x, y, z] = d.groups;
+diff --git a/crates/victory-shader/src/emit/intersect.rs b/crates/victory-shader/src/emit/intersect.rs
+index b32afa8..13302fd 100644
+--- a/crates/victory-shader/src/emit/intersect.rs
++++ b/crates/victory-shader/src/emit/intersect.rs
+@@ -25,7 +25,7 @@
+ //! Each lane reads only the dwords its node's kind needs: 28 for a 32-bit
+ //! box node, 16 for a 16-bit one, 10 for a triangle.
+ 
+-use super::{Attr, Bin, Fields, Inst, Lower, Operand, Reg, Term, V, Why, flags, pred};
++use super::{Attr, Bin, Cast, Fields, Inst, Lower, Operand, Reg, Tag, Term, V, Why, flags, pred};
+ use crate::bvh;
+ use crate::resource::BvhNodes;
+ 
+@@ -161,6 +161,17 @@ impl<'a> Lower<'a> {
+                     *w = self.i32_of(v)?;
+                 }
+                 let (low, high) = self.bvh_address(words[0], words[1], pointer, pointer_high);
++                let hw_op = super::host_hw_bvh();
++                if hw_op != 0 {
++                    let ray_bits = &x[1 + usize::from(wide)..];
++                    let results = self.bvh_hw(
++                        low, high, pointer, ray_bits, &ray, sort, guard, hw_op,
++                    );
++                    for (k, &r) in results.iter().enumerate() {
++                        self.write(inst, Reg::V(dst + k as u8), r, guard);
++                    }
++                    return Ok(());
++                }
+                 // One look for the node's copy, before the branches: a
+                 // node is 64 bytes on 64, so its first half lies in one
+                 // 64 KiB page whatever its kind.
+@@ -223,6 +234,208 @@ impl<'a> Lower<'a> {
+         Ok(())
+     }
+ 
++    /// Hardware BVH ray-node intersection via AMD D3D12 shader intrinsics
++    /// (`AmdExtD3DShaderIntrinsics_IntersectBvhNode`, opcode `0x22`).
++    ///
++    /// Translates the guest 64-bit node address to a 64-bit host GPU VA via
++    /// the page VA table (`t`[`super::shader::SLOT_MEMORY_VAS`] in
++    /// `ROOT_CBV_SPACE`), and falls back to software [`Self::bvh_boxes`] /
++    /// [`Self::bvh_triangle`] (recording faults in `SLOT_FAULTS`) for
++    /// unmapped, out-of-directory, partial, unaligned, or page-straddling
++    /// 128-byte box32 nodes.
++    #[allow(clippy::too_many_arguments)]
++    fn bvh_hw(
++        &mut self,
++        low: V,
++        high: V,
++        pointer: V,
++        ray_bits: &[V],
++        ray: &Ray,
++        sort: bool,
++        guard: Option<V>,
++        opcode: u8,
++    ) -> Vec<V> {
++        use super::super::shader::{MEMORY_PAGES, SLOT_MEMORY_VAS};
++
++        let zero = self.s.m.i32(0);
++        let i32t = self.s.t.i32;
++        let gate = self.begin_guarded(guard);
++        let head = self.cur;
++        let (k5, k6, k7) = (self.s.m.i32(5), self.s.m.i32(6), self.s.m.i32(7));
++        let kind = self.s.m.bin(head, Bin::And, pointer, k7);
++        let is_valid = self.s.m.cmp(head, pred::IULT, kind, k6);
++        let lookup_block = self.s.m.new_block();
++        let hw_block = self.s.m.new_block();
++        let sw_block = self.s.m.new_block();
++        let sw_box_block = self.s.m.new_block();
++        let sw_tri_block = self.s.m.new_block();
++        let join = self.s.m.new_block();
++        self.s
++            .m
++            .terminate(head, Term::CondBr(is_valid, lookup_block, join));
++
++        // Look up the 64-bit host GPU VA for this 64 KiB guest page.
++        self.cur = lookup_block;
++        let lc = lookup_block;
++        let (k16, k8) = (self.s.m.i32(16), self.s.m.i32(0xFF));
++        let page_lo = self.s.m.bin(lc, Bin::LShr, low, k16);
++        let page_hi = self.s.m.bin(lc, Bin::And, high, k8);
++        let page_hi = self.s.m.bin(lc, Bin::Shl, page_hi, k16);
++        let page = self.s.m.bin(lc, Bin::Or, page_lo, page_hi);
++        let last = self.s.m.i32(MEMORY_PAGES - 1);
++        let page = self
++            .s
++            .op(lc, "binary.i32", Attr::ReadNone, i32t, 40, &[page, last]);
++        self.s.m.tag(page, Tag::Clamp);
++        let vas = self.s.root_srv_handle(SLOT_MEMORY_VAS);
++        let (k3, iu, both, align) = (
++            self.s.m.i32(3),
++            self.s.m.undef(i32t),
++            self.s.m.i8(3),
++            self.s.m.i32(4),
++        );
++        let va_off = self.s.m.bin(lc, Bin::Shl, page, k3);
++        let loaded = self.s.op(
++            lc,
++            "rawBufferLoad.f32",
++            Attr::ReadOnly,
++            self.s.t.res_ret,
++            139,
++            &[vas, va_off, iu, both, align],
++        );
++        let f_lo = self.s.m.extract(lc, loaded, 0);
++        let va_lo = self.as_int(f_lo);
++        let f_hi = self.s.m.extract(lc, loaded, 1);
++        let va_hi = self.as_int(f_hi);
++
++        let mask16 = self.s.m.i32(0xFFFF);
++        let within = self.s.m.bin(lc, Bin::And, low, mask16);
++        let max_hi = self.s.m.i32(MEMORY_PAGES >> 16);
++        let in_dir = self.s.m.cmp(lc, pred::IULT, high, max_hi);
++        let va_or = self.s.m.bin(lc, Bin::Or, va_lo, va_hi);
++        let mapped = self.s.m.cmp(lc, pred::NE, va_or, zero);
++        let mask63 = self.s.m.i32(63);
++        let va_or_within = self.s.m.bin(lc, Bin::Or, va_lo, within);
++        let low6 = self.s.m.bin(lc, Bin::And, va_or_within, mask63);
++        let aligned = self.s.m.cmp(lc, pred::EQ, low6, zero);
++        let is_box32 = self.s.m.cmp(lc, pred::EQ, kind, k5);
++        let max_box32 = self.s.m.i32(0xFF80);
++        let max_node64 = self.s.m.i32(0xFFC0);
++        let max_within = self.s.m.select(lc, is_box32, max_box32, max_node64);
++        let fits_in_page = self.s.m.cmp(lc, pred::IULE, within, max_within);
++        let ok0 = self.s.m.bin(lc, Bin::And, mapped, in_dir);
++        let ok1 = self.s.m.bin(lc, Bin::And, aligned, fits_in_page);
++        let use_hw = self.s.m.bin(lc, Bin::And, ok0, ok1);
++        self.s
++            .m
++            .terminate(lc, Term::CondBr(use_hw, hw_block, sw_block));
++
++        // Hardware BVH4 intersection via AMD's shader-intrinsics magic UAV.
++        self.cur = hw_block;
++        let node_lo = self.s.m.bin(hw_block, Bin::Add, va_lo, within);
++        let carry_bit = self.s.m.cmp(hw_block, pred::IULT, node_lo, va_lo);
++        let carry = self.s.m.cast(hw_block, Cast::ZExt, carry_bit, i32t);
++        let node_hi = self.s.m.bin(hw_block, Bin::Add, va_hi, carry);
++        let k29 = self.s.m.i32(29);
++        let sh_lo = self.s.m.bin(hw_block, Bin::LShr, node_lo, k3);
++        let hi_bits = self.s.m.bin(hw_block, Bin::Shl, node_hi, k29);
++        let ptr_lo_raw = self.s.m.bin(hw_block, Bin::Or, sh_lo, hi_bits);
++        let ptr_lo = self.s.m.bin(hw_block, Bin::Or, ptr_lo_raw, kind);
++        let ptr_hi = self.s.m.bin(hw_block, Bin::LShr, node_hi, k3);
++
++        let amd_uav = self.s.amd_ext_handle();
++        let phase0 = self.s.m.i32(0x5000_0000 | u32::from(opcode));
++        let phase1 = self.s.m.i32(0x5100_0000 | u32::from(opcode));
++        // AmdExtIntersectBvhNodeFlag: BoxSortEnable (1) | ReturnBarycentrics (2),
++        // zero box growth (`0`).
++        let flags_val = self.s.m.i32(u32::from(sort) | 2);
++        let args: [V; 14] = [
++            ptr_lo,
++            ptr_hi,
++            ray_bits[0],
++            ray_bits[1],
++            ray_bits[2],
++            ray_bits[3],
++            ray_bits[4],
++            ray_bits[5],
++            ray_bits[6],
++            ray_bits[7],
++            ray_bits[8],
++            ray_bits[9],
++            flags_val,
++            zero,
++        ];
++        for (idx, &val) in args.iter().enumerate() {
++            let idx_c = self.s.m.i32(idx as u32);
++            self.s.op(
++                hw_block,
++                "atomicCompareExchange.i32",
++                Attr::NoUnwind,
++                i32t,
++                79,
++                &[amd_uav, phase0, iu, iu, idx_c, val],
++            );
++        }
++        let mut hw_res = [zero; 4];
++        for (idx, dst_val) in hw_res.iter_mut().enumerate() {
++            let idx_c = self.s.m.i32(idx as u32);
++            *dst_val = self.s.op(
++                hw_block,
++                "atomicCompareExchange.i32",
++                Attr::NoUnwind,
++                i32t,
++                79,
++                &[amd_uav, phase1, iu, iu, idx_c, zero],
++            );
++        }
++        self.s.m.terminate(hw_block, Term::Br(join));
++
++        // Software fallback for unmapped, partial, unaligned or page-straddling
++        // nodes (also records missing pages in `SLOT_FAULTS`).
++        self.cur = sw_block;
++        let (handle, byte, sw_mapped) = self.bvh_memory(low, high, None);
++        let sw_head = self.cur;
++        let at = NodeAt::Memory {
++            handle,
++            byte,
++            low,
++            high,
++            mapped: sw_mapped,
++        };
++        let k4 = self.s.m.i32(4);
++        let pair = self.s.m.bin(sw_head, Bin::And, pointer, k6);
++        let is_box = self.s.m.cmp(sw_head, pred::EQ, pair, k4);
++        self.s
++            .m
++            .terminate(sw_head, Term::CondBr(is_box, sw_box_block, sw_tri_block));
++        self.cur = sw_box_block;
++        let sw_boxes = self.bvh_boxes(at, kind, ray, sort);
++        let sw_box_end = self.cur;
++        self.s.m.terminate(sw_box_end, Term::Br(join));
++        self.cur = sw_tri_block;
++        let sw_tri = self.bvh_triangle(at, kind, ray);
++        let sw_tri_end = self.cur;
++        self.s.m.terminate(sw_tri_end, Term::Br(join));
++
++        self.cur = join;
++        let other = bvh::MISS.map(|f| self.s.m.i32(f.to_bits()));
++        let mut results = Vec::with_capacity(4);
++        for k in 0..4 {
++            let phi = self.s.m.phi(join, i32t);
++            self.s.m.set_phi(
++                phi,
++                vec![
++                    (other[k], head),
++                    (hw_res[k], hw_block),
++                    (sw_boxes[k], sw_box_end),
++                    (sw_tri[k], sw_tri_end),
++                ],
++            );
++            results.push((phi, zero));
++        }
++        self.end_guarded(gate, &results)
++    }
++
+     /// Title memory at `low`/`high` for a node's bytes: the raw view of the
+     /// host copy holding the address and the byte in that view
+     /// ([`Lower::memory`]: a page the host has no copy of reads zeros and
+diff --git a/crates/victory-shader/src/emit/intersect_tests.rs b/crates/victory-shader/src/emit/intersect_tests.rs
+index dd21ec3..97aa72f 100644
+--- a/crates/victory-shader/src/emit/intersect_tests.rs
++++ b/crates/victory-shader/src/emit/intersect_tests.rs
+@@ -858,3 +858,409 @@ fn mask_operations_on_a_joined_number_give_the_number() {
+         eprintln!("not run on a device; lowered only");
+     }
+ }
++
++struct HwBvhReset;
++impl Drop for HwBvhReset {
++    fn drop(&mut self) {
++        super::lower::TEST_HW_BVH.set(None);
++    }
++}
++
++/// Hardware BVH lowering (`bvh_hw`) emits valid SM 6.6 DXIL with the page VA
++/// table (`t252` in `ROOT_CBV_SPACE`) and AMD's magic UAV (`u0` in
++/// `AMD_EXT_SPACE`), while retaining the software fallback (`SLOT_MEMORY` /
++/// `SLOT_FAULTS`).
++#[test]
++fn amd_hw_bvh_lowers_and_validates() {
++    let _reset = HwBvhReset;
++    super::lower::TEST_HW_BVH.set(Some(0x22));
++    for wide in [false, true] {
++        let (shader, res) = build(wide, WHOLE).expect("hw bvh lowers and validates");
++        assert_eq!(res.bvh.len(), 1);
++        assert!(shader.root_srvs.contains(&super::SLOT_MEMORY_VAS));
++        assert!(shader.root_uavs.contains(&super::SLOT_AMD_EXT));
++        assert!(shader.root_srvs.contains(&super::SLOT_MEMORY));
++        assert!(shader.root_uavs.contains(&super::SLOT_FAULTS));
++    }
++}
++
++/// Builds the user-data constants for an `intersect_tests` shader (table at
++/// heap index 0, `USER_MEMORY_BASE` at slot 2).
++fn hw_user_data(shader: &HostShader) -> Vec<u32> {
++    let mut ud = vec![0u32; shader.user_data_dwords().max(5) as usize];
++    for u in &shader.user_data {
++        ud[u.index as usize] = match u.root {
++            RootType::Table => 0,
++            RootType::Constants => 0,
++            RootType::Other(k) if k == super::USER_MEMORY_BASE => 2,
++            other => panic!("unexpected user_data entry: {other:?}"),
++        };
++    }
++    ud
++}
++
++/// Hardware BVH (`IntersectBvhNode`, opcode `0x22`) on a live AMD GPU matches
++/// the CPU reference across box32, box16, triangle, non-box/tri and masked
++/// lanes for both 64-bit and 32-bit node pointers (sorted and unsorted).
++#[test]
++fn amd_hw_bvh_matches_the_reference_on_the_gpu() {
++    let _one = super::valu_tests::ONE_AT_A_TIME
++        .lock()
++        .unwrap_or_else(|e| e.into_inner());
++    let Ok(host) = Host::new(false) else {
++        eprintln!("no SM 6.6 hardware device; skipped");
++        return;
++    };
++    let adapter = host.adapter_name().unwrap_or_else(|| "unknown".into());
++    let Some(guard) = super::host::enable_amd_bvh(&host.device) else {
++        eprintln!(
++            "AMD IntersectBvhNode extension unavailable on {adapter}; skipped"
++        );
++        return;
++    };
++    eprintln!(
++        "AMD IntersectBvhNode enabled on {adapter}: opcode={:#04x}, support_code={:#04x}",
++        guard.opcode, guard.support_code
++    );
++    let _reset = HwBvhReset;
++    super::lower::TEST_HW_BVH.set(Some(guard.opcode));
++
++    // Page-aligned title base at 4 GiB (`page = 0x1_0000`, `high = 1 < 0x20`).
++    const HW_BASE: u64 = 0x1_0000_0000;
++    const FIRST_PAGE: usize = (HW_BASE >> 16) as usize;
++    let structure = HW_BASE + u64::from(NODES);
++    let desc32_unsorted = Descriptor::Numbers((structure >> 8) as u32, (structure >> 40) as u32);
++    let desc32_sorted = Descriptor::Numbers(
++        (structure >> 8) as u32,
++        (structure >> 40) as u32 | bvh::BOX_SORT,
++    );
++    let (scene, batches) = scene();
++
++    for (label, wide, descriptor, pointers, sort) in [
++        ("bvh64-sorted", true, WHOLE, HW_BASE + u64::from(NODES), true),
++        ("bvh32-sorted", false, desc32_sorted, 0, true),
++        ("bvh32-unsorted", false, desc32_unsorted, 0, false),
++    ] {
++        let (shader, _) = build(wide, descriptor).expect("hw bvh shader lowers");
++        assert!(shader.root_srvs.contains(&super::SLOT_MEMORY_VAS));
++        assert!(shader.root_uavs.contains(&super::SLOT_AMD_EXT));
++        let (root, pso) = host
++            .compute_pipeline(&shader)
++            .unwrap_or_else(|e| panic!("{label}: compute_pipeline failed: {e}"));
++        let ud = hw_user_data(&shader);
++        let (mut box_hits, mut tri_hits) = (0usize, 0usize);
++
++        for (b, batch) in batches.iter().enumerate() {
++            let mut data = buffer(&scene, batch, pointers);
++            // Pad to a full 64 KiB page so `MemoryVaTable` maps it whole.
++            let target_dwords = data.len().next_multiple_of(16_384).max(16_384);
++            data.resize(target_dwords, 0);
++            // Root params sorted by `(slot, kind)`:
++            // 0: UserData, 1: SLOT_MEMORY_VAS (252, SRV), 2: SLOT_AMD_EXT (252, UAV),
++            // 3: SLOT_FAULTS (253, UAV), 4: SLOT_MEMORY (254, SRV).
++            let roots = vec![
++                (0, Root::Constants(ud.clone())),
++                (
++                    1,
++                    Root::MemoryVaTable {
++                        first_page: FIRST_PAGE,
++                        view_index: 0,
++                    },
++                ),
++                (2, Root::Uav(1)),
++                (3, Root::Uav(super::MEMORY_FAULTS)),
++                (4, Root::View { srv: true, data: vec![0u32; 64] }),
++            ];
++            let out = host
++                .dispatch(
++                    &root,
++                    &pso,
++                    &Dispatch {
++                        roots,
++                        views: &[
++                            View::Buffer {
++                                data: &data,
++                                stride: Stride::Raw,
++                            },
++                            View::RawUav(4 * THREADS),
++                            View::RawUav(16),
++                        ],
++                        samplers: &[],
++                        groups: [1, 1, 1],
++                    },
++                )
++                .unwrap_or_else(|e| panic!("{label}: dispatch batch {b} failed: {e}"));
++
++            for t in 0..THREADS as usize {
++                let case = batch.get(t).copied().flatten();
++                let want = match batch.get(t) {
++                    Some(c) => expected(&scene, c, sort),
++                    None => BEFORE,
++                };
++                let got = &out[0][4 * t..4 * t + 4];
++                match case {
++                    None => {
++                        assert_eq!(got, want, "{label} batch {b} thread {t}: masked lane changed");
++                    }
++                    Some((node_idx, kind @ 0..=3, _)) => {
++                        let w_f = want.map(f32::from_bits);
++                        let g_f = [got[0], got[1], got[2], got[3]].map(f32::from_bits);
++                        let w_t = w_f[0] / w_f[1];
++                        let g_t = g_f[0] / g_f[1];
++                        let w_hit = w_t.is_finite();
++                        let g_hit = g_t.is_finite();
++                        if w_hit && g_hit {
++                            // `bvh::triangle_vertices` reorders `[v0, v1, v2]` to `[first, i, j]`,
++                            // flipping `det`'s sign on odd permutations (e.g. `i=2, j=1`).
++                            // Real RDNA 2 hardware preserves `[v0, v1, v2]` winding and only
++                            // permutes which barycentric channels are returned.
++                            let id = scene.node(node_idx)[15] >> (8 * kind);
++                            let (vi, vj) = (id & 3, (id >> 2) & 3);
++                            let first = 3u32.wrapping_sub(vi).wrapping_sub(vj) & 3;
++                            let odd_perm = (first + 1) % 3 != vi;
++                            let expected_positive = w_f[1].is_sign_positive() ^ odd_perm;
++                            assert_eq!(
++                                g_f[1].is_sign_positive(),
++                                expected_positive,
++                                "{label} b={b} t={t} kind={kind}: face sign mismatch (odd_perm={odd_perm}) got={g_f:?} want={w_f:?}"
++                            );
++                            let rel = |a: f32, b: f32| (a - b).abs() <= 1e-4 * b.abs().max(1.0);
++                            assert!(
++                                rel(g_t, w_t)
++                                    && rel(g_f[2] / g_f[1], w_f[2] / w_f[1])
++                                    && rel(g_f[3] / g_f[1], w_f[3] / w_f[1]),
++                                "{label} b={b} t={t} kind={kind}: triangle mismatch got={g_f:?} want={w_f:?}"
++                            );
++                            tri_hits += 1;
++                        } else if w_hit != g_hit {
++                            let (t_i, t_j) = if w_hit {
++                                (w_f[2] / w_f[1], w_f[3] / w_f[1])
++                            } else {
++                                (g_f[2] / g_f[1], g_f[3] / g_f[1])
++                            };
++                            let min_b = t_i.min(t_j).min(1.0 - t_i - t_j);
++                            assert!(
++                                min_b.abs() < 1e-3,
++                                "{label} b={b} t={t} kind={kind}: triangle hit mismatch got={g_f:?} want={w_f:?}"
++                            );
++                        }
++                    }
++                    Some((node_idx, kind @ (4 | 5), ray)) => {
++                        if got != want {
++                            let mut g_sorted = got.to_vec();
++                            let mut w_sorted = want.to_vec();
++                            g_sorted.sort_unstable();
++                            w_sorted.sort_unstable();
++                            if g_sorted != w_sorted {
++                                // RDNA 2/3/4 hardware `image_bvh*_intersect_ray` uses an
++                                // inclusive `enter <= ray.extent` (and hardware-specific
++                                // degenerate 0-direction handling), whereas the software
++                                // reference uses strict `<`. Verify every extra/missing
++                                // child sits on the exact `extent` boundary or has a
++                                // zero ray direction.
++                                let words = scene.node(node_idx);
++                                let boxes = if kind == 5 {
++                                    bvh::boxes32(&words)
++                                } else {
++                                    bvh::boxes16(&words)
++                                };
++                                let boundary_or_zero = ray.direction == [0.0; 3]
++                                    || (0..4).any(|k| {
++                                        let bx = boxes[k];
++                                        if bx[0].is_nan() {
++                                            return false;
++                                        }
++                                        // Grazing face with zero ray direction (`0 * inf` -> NaN in RDNA2 HW
++                                        // vs clamped `f32::MAX` in software reference).
++                                        let grazing = (0..3).any(|a| {
++                                            ray.direction[a] == 0.0
++                                                && (bx[a] == ray.origin[a]
++                                                    || bx[3 + a] == ray.origin[a])
++                                        });
++                                        if grazing {
++                                            return true;
++                                        }
++                                        let mut enter = f32::NEG_INFINITY;
++                                        for a in 0..3 {
++                                            let inv = ray.inverse[a].clamp(-f32::MAX, f32::MAX);
++                                            let l = (bx[a] - ray.origin[a]) * inv;
++                                            let h = (bx[3 + a] - ray.origin[a]) * inv;
++                                            enter = enter.max(l.min(h));
++                                        }
++                                        (enter - ray.extent).abs() <= 1e-4 * ray.extent.abs().max(1.0)
++                                    });
++                                assert!(
++                                    boundary_or_zero,
++                                    "{label} b={b} t={t} kind={kind}: box mismatch got={got:08x?} want={want:08x?} ray={ray:?}"
++                                );
++                            }
++                        }
++                        box_hits += want.iter().filter(|&&c| c != bvh::NONE).count();
++                    }
++                    Some((_, kind, _)) => {
++                        assert_eq!(
++                            got, want,
++                            "{label} b={b} t={t} kind={kind}: non-box/tri mismatch"
++                        );
++                    }
++                }
++            }
++        }
++        assert!(box_hits > 100 && tri_hits > 50, "{label}: too few hits ({box_hits}, {tri_hits})");
++        eprintln!(
++            "AMD HW BVH {label} (opcode={:#04x}, support={:#04x}): PASS ({box_hits} box hits, {tri_hits} triangle hits)",
++            guard.opcode, guard.support_code
++        );
++    }
++    drop(guard);
++}
++
++/// Standalone GPU throughput benchmark comparing software `image_bvh64_intersect_ray`
++/// against hardware `IntersectBvhNode` (`opcode 0x22`) on a live AMD GPU.
++///
++/// Run with:
++/// `VICTORY_D3D12_ADAPTER=AMD cargo +stable test --locked -p victory-shader --features host --lib amd_hw_bvh_throughput_benchmark -- --ignored --nocapture --test-threads=1`
++#[test]
++#[ignore]
++fn amd_hw_bvh_throughput_benchmark() {
++    use std::time::Instant;
++
++    let _one = super::valu_tests::ONE_AT_A_TIME
++        .lock()
++        .unwrap_or_else(|e| e.into_inner());
++    let Ok(host) = Host::new(false) else {
++        eprintln!("no SM 6.6 hardware device; skipped");
++        return;
++    };
++    let adapter = host.adapter_name().unwrap_or_else(|| "unknown".into());
++    let Some(guard) = super::host::enable_amd_bvh(&host.device) else {
++        eprintln!("AMD IntersectBvhNode extension unavailable on {adapter}; skipped");
++        return;
++    };
++    let _reset = HwBvhReset;
++
++    const HW_BASE: u64 = 0x1_0000_0000;
++    const FIRST_PAGE: usize = (HW_BASE >> 16) as usize;
++    let (scene, batches) = scene();
++    // Build a representative 32-lane mixed box32/box16/triangle batch.
++    let mut mixed: Vec<Case> = Vec::with_capacity(THREADS as usize);
++    for c in batches.iter().flatten() {
++        if matches!(c, Some((_, 4 | 5, _))) && mixed.len() < 16 {
++            mixed.push(*c);
++        }
++    }
++    for c in batches.iter().flatten() {
++        if matches!(c, Some((_, 0..=3, _))) && mixed.len() < THREADS as usize {
++            mixed.push(*c);
++        }
++    }
++    let mut data = buffer(&scene, &mixed, HW_BASE + u64::from(NODES));
++    data.resize(data.len().next_multiple_of(16_384).max(16_384), 0);
++
++    // 65,535 * 64 * 32 = 134,215,680 ray-node tests per dispatch (well under TDR,
++    // large enough that GPU execution dominates setup).
++    let groups = [65_535u32, 64, 1];
++    let total_rays = u64::from(groups[0]) * u64::from(groups[1]) * u64::from(THREADS);
++
++    let bench = |hw_opcode: u8| -> (f64, f64) {
++        let _mem = if hw_opcode == 0 {
++            Some(Memory::at(HW_BASE))
++        } else {
++            None
++        };
++        super::lower::TEST_HW_BVH.set(Some(hw_opcode));
++        let (shader, _) = build(true, WHOLE).expect("bench shader lowers");
++        let (root, pso) = host.compute_pipeline(&shader).expect("compute_pipeline");
++        let ud = hw_user_data(&shader);
++        let make_roots = || {
++            if hw_opcode != 0 {
++                vec![
++                    (0, Root::Constants(ud.clone())),
++                    (
++                        1,
++                        Root::MemoryVaTable {
++                            first_page: FIRST_PAGE,
++                            view_index: 0,
++                        },
++                    ),
++                    (2, Root::Uav(1)),
++                    (3, Root::Uav(super::MEMORY_FAULTS)),
++                    (4, Root::View { srv: true, data: vec![0u32; 64] }),
++                ]
++            } else {
++                vec![(0, Root::Constants(ud.clone()))]
++            }
++        };
++        let views = [
++            View::Buffer {
++                data: &data,
++                stride: Stride::Raw,
++            },
++            View::RawUav(4 * THREADS),
++            View::RawUav(16),
++        ];
++        // Warmup + measure baseline 1-group dispatch setup overhead (includes VA table upload).
++        host.dispatch(
++            &root,
++            &pso,
++            &Dispatch {
++                roots: make_roots(),
++                views: &views,
++                samplers: &[],
++                groups: [1, 1, 1],
++            },
++        )
++        .expect("warmup");
++        let mut overhead = Vec::with_capacity(3);
++        for _ in 0..3 {
++            let t0 = Instant::now();
++            host.dispatch(
++                &root,
++                &pso,
++                &Dispatch {
++                    roots: make_roots(),
++                    views: &views,
++                    samplers: &[],
++                    groups: [1, 1, 1],
++                },
++            )
++            .expect("overhead");
++            overhead.push(t0.elapsed().as_secs_f64() * 1000.0);
++        }
++        overhead.sort_by(f64::total_cmp);
++        let setup_ms = overhead[overhead.len() / 2];
++
++        let mut samples = Vec::with_capacity(5);
++        for _ in 0..5 {
++            let t0 = Instant::now();
++            host.dispatch(
++                &root,
++                &pso,
++                &Dispatch {
++                    roots: make_roots(),
++                    views: &views,
++                    samplers: &[],
++                    groups,
++                },
++            )
++            .expect("bench dispatch");
++            samples.push(t0.elapsed().as_secs_f64() * 1000.0);
++        }
++        samples.sort_by(f64::total_cmp);
++        let total_ms = samples[samples.len() / 2];
++        (total_ms, (total_ms - setup_ms).max(0.01))
++    };
++
++    let (sw_total, sw_gpu) = bench(0);
++    let (hw_total, hw_gpu) = bench(guard.opcode);
++    eprintln!(
++        "AMD HW BVH64 throughput ({adapter}, {total_rays} ray-node tests, median of 5):\n  software (direct TEST_MEMORY): total={sw_total:.2} ms, gpu={sw_gpu:.2} ms ({:.1} Mrays/s)\n  hardware (IntersectBvhNode opcode={:#04x}, support={:#04x}): total={hw_total:.2} ms, gpu={hw_gpu:.2} ms ({:.1} Mrays/s)\n  speedup: total={:.2}x, gpu={:.2}x",
++        (total_rays as f64) / (sw_gpu * 1e3),
++        guard.opcode,
++        guard.support_code,
++        (total_rays as f64) / (hw_gpu * 1e3),
++        sw_total / hw_total,
++        sw_gpu / hw_gpu,
++    );
++    drop(guard);
++}
+diff --git a/crates/victory-shader/src/emit/lower.rs b/crates/victory-shader/src/emit/lower.rs
+index eb14eef..2c04cd9 100644
+--- a/crates/victory-shader/src/emit/lower.rs
++++ b/crates/victory-shader/src/emit/lower.rs
+@@ -1541,6 +1541,52 @@ pub(super) fn host_rdna() -> u32 {
+     if HOST_RDNA.load(std::sync::atomic::Ordering::Relaxed) { super::rdna_float() } else { 0 }
+ }
+ 
++static HOST_HW_BVH: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
++
++/// Tells the translator which AMD `IAmdExtD3DShaderIntrinsics` BVH-intersect
++/// opcode is enabled on the host device (`0x22` for `IntersectBvhNode`, `0` for
++/// disabled).
++pub fn set_host_hw_bvh(opcode: u8) {
++    HOST_HW_BVH.store(opcode, std::sync::atomic::Ordering::Relaxed);
++}
++
++/// Whether `VICTORY_HW_BVH=1` is set in the environment.
++pub fn hw_bvh_switch() -> bool {
++    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ON.get_or_init(|| std::env::var_os("VICTORY_HW_BVH").is_some_and(|v| v == "1"))
++}
++
++/// The active AMD hardware BVH intrinsic opcode (`0x22`), or `0` if hardware
++/// BVH intersection is inactive.
++pub fn host_hw_bvh_opcode() -> u8 {
++    if hw_bvh_switch() {
++        HOST_HW_BVH.load(std::sync::atomic::Ordering::Relaxed)
++    } else {
++        0
++    }
++}
++
++/// Whether AMD hardware BVH ray-node intersection is currently active on this
++/// host.
++pub fn host_hw_bvh_active() -> bool {
++    host_hw_bvh_opcode() != 0
++}
++
++#[cfg(test)]
++thread_local! {
++    /// A test's choice for [`host_hw_bvh`], for its thread only (`0` = off).
++    pub(super) static TEST_HW_BVH: std::cell::Cell<Option<u8>> = const { std::cell::Cell::new(None) };
++}
++
++/// The AMD hardware BVH opcode to emit during this lowering (`0` = software).
++pub(super) fn host_hw_bvh() -> u8 {
++    #[cfg(test)]
++    if let Some(op) = TEST_HW_BVH.get() {
++        return op;
++    }
++    host_hw_bvh_opcode()
++}
++
+ /// The refusal of a first half of an interpolation whose result is read
+ /// as data ([`Lower::interp`]).
+ pub(super) const FIRST_HALF: &str = "the first half of an interpolation";
+diff --git a/crates/victory-shader/src/emit/mod.rs b/crates/victory-shader/src/emit/mod.rs
+index 8bacf2d..3a3c529 100644
+--- a/crates/victory-shader/src/emit/mod.rs
++++ b/crates/victory-shader/src/emit/mod.rs
+@@ -118,12 +118,18 @@ use crate::{ShaderError, io, ir, resource, structure};
+ 
+ pub use bitcode::census;
+ pub use sampler::StaticSampler;
+-pub use lower::{host_settings, set_host_max_wave, set_host_rdna, set_thread_max_wave};
++pub use lower::{
++    host_hw_bvh_active, host_hw_bvh_opcode, host_settings, hw_bvh_switch, set_host_hw_bvh,
++    set_host_max_wave, set_host_rdna, set_thread_max_wave,
++};
+ pub use rect::rect_list_gs;
+ pub use shader::{
+-    MEMORY_FAULTS, MEMORY_PAGES, MEMORY_READ_ONLY, ROOT_CBV_SPACE, SAMPLER_SPACE, SLOT_FAULTS, SLOT_MEMORY, SLOT_STRIDES,
+-    SLOT_STRIDES_BYTES, SLOT_STRIDES_COUNT, VIEW_ADDRESSES, USER_DATA_SPACE, VIEW_INTEGER, VIEW_SIGNED, VIEW_STRIDE_BITS, USER_DISPATCH_THREADS_X, USER_MEMORY_BASE, USER_ROOT_ADDRESS, USER_VIEW_ADDRESS, USER_VIEW_BIAS,
+-    constants_raw, raw_views, set_raw_views, set_view_heap_limit, view_heap_limit,
++    AMD_EXT_SPACE, MEMORY_FAULTS, MEMORY_PAGES, MEMORY_READ_ONLY, ROOT_CBV_SPACE, SAMPLER_SPACE,
++    SLOT_AMD_EXT, SLOT_FAULTS, SLOT_MEMORY, SLOT_MEMORY_VAS, SLOT_STRIDES, SLOT_STRIDES_BYTES,
++    SLOT_STRIDES_COUNT, USER_DATA_SPACE, USER_DISPATCH_THREADS_X, USER_MEMORY_BASE,
++    USER_ROOT_ADDRESS, USER_VIEW_ADDRESS, USER_VIEW_BIAS, VIEW_ADDRESSES, VIEW_INTEGER,
++    VIEW_SIGNED, VIEW_STRIDE_BITS, constants_raw, raw_views, set_raw_views, set_view_heap_limit,
++    view_heap_limit,
+ };
+ 
+ /// The loop limit without an override: 2^20.
+diff --git a/crates/victory-shader/src/emit/shader.rs b/crates/victory-shader/src/emit/shader.rs
+index 450d135..0958618 100644
+--- a/crates/victory-shader/src/emit/shader.rs
++++ b/crates/victory-shader/src/emit/shader.rs
+@@ -65,6 +65,17 @@ pub const SLOT_STRIDES_BYTES: u32 = VIEW_ADDRESSES + SLOT_STRIDES_COUNT * 8;
+ pub const SLOT_MEMORY: u8 = 254;
+ /// See [`SLOT_MEMORY`].
+ pub const SLOT_FAULTS: u8 = 253;
++/// The root SRV `t<SLOT_MEMORY_VAS>` in [`ROOT_CBV_SPACE`] of a shader using
++/// AMD's hardware BVH ray-node intersection (`VICTORY_HW_BVH=1`):
++/// [`MEMORY_PAGES`] entries of two dwords holding the 64-bit host GPU virtual
++/// address of each 64 KiB page (0 when unmapped, partial or unaligned).
++pub const SLOT_MEMORY_VAS: u8 = 252;
++/// Sentinel slot in [`super::HostShader::root_uavs`] representing AMD's D3D12
++/// shader-intrinsics magic UAV (`u0` in [`AMD_EXT_SPACE`]).
++pub const SLOT_AMD_EXT: u8 = 252;
++/// Register space of AMD's D3D12 shader-intrinsics magic UAV (`u0`), used to
++/// invoke `AmdExtD3DShaderIntrinsics_IntersectBvhNode`.
++pub const AMD_EXT_SPACE: u32 = 2_147_420_894;
+ /// Entries of the [`SLOT_MEMORY`] directory: title addresses below 128 GiB.
+ pub const MEMORY_PAGES: u32 = 1 << 21;
+ /// In a directory entry's first dword: shaders do not store there by address
+@@ -445,6 +456,32 @@ impl Shader {
+         h
+     }
+ 
++    /// The handle of AMD's shader-intrinsics magic UAV (`u0` in
++    /// [`AMD_EXT_SPACE`]), made in the entry block and recorded under
++    /// [`SLOT_AMD_EXT`] in `root_uavs`.
++    pub fn amd_ext_handle(&mut self) -> V {
++        if let Some(&(_, h)) = self.root_uavs.iter().find(|r| r.0 == SLOT_AMD_EXT) {
++            return h;
++        }
++        let r = self.m.i32(0);
++        let bind = [r, r, self.m.i32(AMD_EXT_SPACE), self.m.i8(1)];
++        let bind = self.m.aggregate(self.t.bind, &bind);
++        let f = self.m.bool(false);
++        let block = self.entry;
++        let h = self.op(
++            block,
++            "createHandleFromBinding",
++            Attr::ReadNone,
++            self.t.handle,
++            217,
++            &[bind, r, f],
++        );
++        let h = self.annotate(block, h, 11 | 0x1000, 0);
++        self.flags |= flags::RAW_BUFFERS;
++        self.root_uavs.push((SLOT_AMD_EXT, h));
++        h
++    }
++
+     /// The handle of immediate sampler `n` (a comparison sampler when its
+     /// bit in `cmp_samplers` is set).
+     pub fn sampler_handle(&mut self, block: usize, n: u32) -> V {
+@@ -709,6 +746,11 @@ impl Shader {
+                 let no = self.m.md_value(no);
+                 let mut list = Vec::new();
+                 for (n, (slot, _)) in self.root_uavs.clone().into_iter().enumerate() {
++                    let (space, reg) = if slot == SLOT_AMD_EXT {
++                        (AMD_EXT_SPACE, 0)
++                    } else {
++                        (ROOT_CBV_SPACE, u32::from(slot))
++                    };
+                     // Id, variable, name, space, lower bound, range size,
+                     // shape (11: raw buffer), globally coherent, counter,
+                     // rasterizer ordered, no extra properties.
+@@ -716,8 +758,8 @@ impl Shader {
+                         Some(i32c(&mut self, n as u32)),
+                         Some(self.m.md_value(u)),
+                         Some(empty),
+-                        Some(i32c(&mut self, ROOT_CBV_SPACE)),
+-                        Some(i32c(&mut self, u32::from(slot))),
++                        Some(i32c(&mut self, space)),
++                        Some(i32c(&mut self, reg)),
+                         Some(i32c(&mut self, 1)),
+                         Some(i32c(&mut self, 11)),
+                         Some(no),
+@@ -728,8 +770,8 @@ impl Shader {
+                     list.push(Some(self.m.md_node(ops)));
+                     bindings.push(Binding {
+                         kind: 7,
+-                        space: ROOT_CBV_SPACE,
+-                        register: u32::from(slot),
++                        space,
++                        register: reg,
+                         dxil_kind: 11,
+                     });
+                 }
+-- 
+2.43.0
+

@@ -399,6 +399,15 @@ def cmd_session(args) -> int:
     return EXIT_OK
 
 
+def _fresh_cache_warm_failure(output: str) -> bool:
+    """`victory warm` failing only because <cache>\\pipelines does not exist yet."""
+
+    text = output.lower()
+    return ("os error 3" in text or "cannot find the path" in text) and (
+        "pipelines" in text or "warm-done" in text
+    )
+
+
 def cmd_prepare(args) -> int:
     """Translate every shader and build every recorded pipeline ahead of a run.
 
@@ -473,6 +482,13 @@ def cmd_prepare(args) -> int:
         rc, out, err = util.run(argv, cwd=cwd, timeout=7200, env=run_env)
         (cfg.logs_dir / f"prepare-{name}.log").write_text(out + err, encoding="utf-8", errors="replace")
         print("\n".join((out + err).splitlines()[-10:]))
+        if rc != 0 and name == "warm" and _fresh_cache_warm_failure(out + err):
+            # An unpatched runtime's warm fails on a cache no run has written
+            # yet: its pipelines folder does not exist (fixed by Belobug #456,
+            # patches/*/...-pr456-*). Nothing has been recorded either, so
+            # there is nothing to warm.
+            print("note    : no pipelines recorded yet (fresh cache); play once, then run prepare again")
+            continue
         if rc != 0:
             print(f"{name} failed with exit code {rc}; log at {cfg.logs_dir / f'prepare-{name}.log'}",
                   file=sys.stderr)

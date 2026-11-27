@@ -1,0 +1,330 @@
+From 7fc464a63ff93d316945bfc95b7526d52fde5ea1 Mon Sep 17 00:00:00 2001
+From: Geckomacabre <91030858+Geckomacabre@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 22:03:30 -0500
+Subject: [PATCH] VICTORY_MAX_STEP_MS=<ms> (off): raise the title's longest
+ simulation step so the world keeps real speed at low frame rates
+
+The title's timer step (+0x2226040) is max(min(dt, 1/15 s), 1/30 s); +0x8dec0 clamps
+the world update's step to 1/15 s again, and the paused branch of +0x22264d0 too. So a
+frame longer than 66.7 ms moves the world only 66.7 ms: at 8 fps it runs at about half
+speed, at 4 fps at a quarter. The 1/15 s constant has 64 readers, so it stays; the
+three vmovss loads are pointed at a float of ours in the int3 padding after
++0x2226040's ret (+0x2226128). Every site's whole instruction is compared first, all or
+nothing, and only on the known build (written in memory after load).
+VICTORY_MAX_STEP_MS takes 66.7 to 333 ms (100 is a good value); longer steps mean more
+of the title's 1/15 s physics substeps per frame. VICTORY_STEP_LOG=1 logs game time
+against wall time every 5 s, with or without the patch.
+
+Needs the known build entry (pull request for the Series S upscaler choice).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ apps/victory/src/run.rs                 |  97 +++++++++++++++++++
+ crates/victory-game/src/lib.rs          |   1 +
+ crates/victory-game/src/step.rs         | 118 ++++++++++++++++++++++++
+ crates/victory-loader/src/resolution.rs |  30 ++++++
+ 4 files changed, 246 insertions(+)
+ create mode 100644 crates/victory-game/src/step.rs
+
+diff --git a/apps/victory/src/run.rs b/apps/victory/src/run.rs
+index e0eb1de..96b4009 100644
+--- a/apps/victory/src/run.rs
++++ b/apps/victory/src/run.rs
+@@ -239,6 +239,37 @@ pub fn run(
+         // SAFETY: the image stays mapped and nothing of it has run yet.
+         unsafe { victory_loader::resolution::apply_asked(image.base(), size, upscaler_default) };
+     }
++    // VICTORY_MAX_STEP_MS=<ms> (off without it): the title's longest
++    // simulation step (1/15 s) raised, so the world keeps real speed below
++    // 15 frames a second (victory-game's `step`). Only on the known build,
++    // every site compared first (all or nothing).
++    #[cfg(windows)]
++    if execute && let Ok(spec) = std::env::var("VICTORY_MAX_STEP_MS") {
++        match (victory_game::step::parse_ms(&spec), build) {
++            (Err(why), _) => eprintln!("VIctory: {why}; the title's step is left as it is"),
++            (Ok(_), None) => eprintln!("VIctory: VICTORY_MAX_STEP_MS: not a known build of the title; its step is left as it is"),
++            (Ok(ms), Some(_)) => {
++                let size = image.info().size_of_image as usize;
++                let patches = victory_game::step::patches(ms);
++                // SAFETY: the image stays mapped and nothing of it has run yet.
++                match unsafe { victory_loader::resolution::write_all_checked(image.base(), size, &patches) } {
++                    Ok(()) => {
++                        for (rva, old, new) in &patches {
++                            println!(
++                                "title patch    +{rva:#x} longest step {ms} ms (VICTORY_MAX_STEP_MS): {} -> {}",
++                                hex_str(old),
++                                hex_str(new)
++                            );
++                        }
++                        tracing::info!(ms, "title step: longest simulation step raised (VICTORY_MAX_STEP_MS)");
++                    }
++                    Err(why) => {
++                        eprintln!("VIctory: VICTORY_MAX_STEP_MS: {why}; the title's step is left as it is");
++                    }
++                }
++            }
++        }
++    }
+     if !execute {
+         println!("not executing (pass --execute to start the title)");
+         return Ok(());
+@@ -247,6 +278,8 @@ pub fn run(
+     victory_loader::set_before_thread_shutdown(victory_hle::known_pipelines::flush);
+     victory_loader::log_crashes_to(temp.with_file_name("crashes.log"));
+     victory_hle::runtime::use_console_timers();
++    #[cfg(windows)]
++    step_log(image.base(), image.info().size_of_image as usize);
+     #[cfg(feature = "diagnostics")]
+     diagnostics(&image, &cfg);
+     let late = LateDlls {
+@@ -544,6 +577,70 @@ impl LoaderLock {
+     }
+ }
+ 
++/// `VICTORY_STEP_LOG=1` (off without it): every 5 s, how far the title's
++/// game time (victory-game's `step::GAME_TIMER`) moved against the wall
++/// clock. `game/wall` 1.00 is real speed; below 1 the title's longest step
++/// (1/15 s, `VICTORY_MAX_STEP_MS`) holds it back. Read only, from a thread
++/// of its own; works with or without the patch.
++#[cfg(windows)]
++fn step_log(base: usize, size: usize) {
++    if std::env::var_os("VICTORY_STEP_LOG").is_none_or(|v| v != "1") {
++        return;
++    }
++    let at = victory_game::step::GAME_TIMER as usize;
++    if at + 0x10 > size {
++        return;
++    }
++    let timer = base + at;
++    let spawned = std::thread::Builder::new()
++        .name("victory-step-log".into())
++        .spawn(move || {
++            // SAFETY: inside the mapped image (checked above), which stays
++            // mapped for the process; plain reads of words the title writes.
++            let read = || unsafe {
++                (
++                    std::ptr::read_volatile(timer as *const u32),
++                    std::ptr::read_volatile((timer + 4) as *const u32),
++                    std::ptr::read_volatile((timer + 0xc) as *const f32),
++                )
++            };
++            let mut since = (std::time::Instant::now(), read());
++            let mut longest = 0f32;
++            loop {
++                std::thread::sleep(std::time::Duration::from_millis(100));
++                let now = read();
++                longest = longest.max(now.2);
++                let wall = since.0.elapsed();
++                if wall < std::time::Duration::from_secs(5) {
++                    continue;
++                }
++                let wall_ms = wall.as_secs_f64() * 1000.0;
++                let game_ms = now.0.wrapping_sub(since.1.0);
++                let frames = now.1.wrapping_sub(since.1.1);
++                tracing::info!(
++                    "title step: game/wall {:.2} (game time {} ms in {:.0} ms), {} frames by its counter, mean step {:.1} ms, longest {:.1} ms (VICTORY_STEP_LOG)",
++                    f64::from(game_ms) / wall_ms,
++                    game_ms,
++                    wall_ms,
++                    frames,
++                    if frames > 0 { f64::from(game_ms) / f64::from(frames) } else { 0.0 },
++                    longest * 1000.0,
++                );
++                since = (std::time::Instant::now(), now);
++                longest = 0.0;
++            }
++        });
++    if let Err(e) = spawned {
++        eprintln!("VIctory: VICTORY_STEP_LOG: no thread for it ({e})");
++    }
++}
++
++/// Bytes as lower-case hex.
++#[cfg(windows)]
++fn hex_str(bytes: &[u8]) -> String {
++    bytes.iter().map(|b| format!("{b:02x}")).collect()
++}
++
+ /// Whether the known build's Series S upscaler choice applies, given
+ /// `VICTORY_TITLE_PATCHES` (`var`): `0` never, `1` on any console; unset
+ /// (or anything else), only with `--console series-s`. On a Series X the
+diff --git a/crates/victory-game/src/lib.rs b/crates/victory-game/src/lib.rs
+index 3a74dbd..a14004f 100644
+--- a/crates/victory-game/src/lib.rs
++++ b/crates/victory-game/src/lib.rs
+@@ -4,6 +4,7 @@
+ //! is defined in docs/asset-policy.md.
+ 
+ pub mod sgd5;
++pub mod step;
+ 
+ /// A specific build of the title executable we know how to run.
+ #[derive(Debug, Clone, Copy)]
+diff --git a/crates/victory-game/src/step.rs b/crates/victory-game/src/step.rs
+new file mode 100644
+index 0000000..d59abfb
+--- /dev/null
++++ b/crates/victory-game/src/step.rs
+@@ -0,0 +1,118 @@
++//! The title's longest simulation step (`VICTORY_MAX_STEP_MS=<ms>`, off
++//! without it), and where its game time is read for the step log
++//! (`VICTORY_STEP_LOG=1`).
++//!
++//! What the title does (the known Series master build, image offsets):
++//!
++//! - Each frame its timer update (+0x22264d0) takes the real time since the
++//!   last frame from `QueryPerformanceCounter` (passed through to the host:
++//!   real time here) and hands it to the step function +0x2226040 for each
++//!   of its timers (game time is the one at +0xabbef40). That function makes
++//!   the step `max(min(dt, 1/15 s), 1/30 s)` (times a scale): the 1/15 s is
++//!   the float at +0x6159ec0, loaded at +0x2226045.
++//! - The paused branch of +0x22264d0 clamps one timer (+0xa958358) the same
++//!   way (load at +0x2226833).
++//! - +0x8dec0 takes the game timer's step (+0xabbef4c) and clamps it to
++//!   1/15 s once more (load at +0x8df76) for the world update after it.
++//!
++//! So a frame longer than 66.7 ms moves the world only 66.7 ms: at 8 frames
++//! a second (125 ms) it runs at about half speed, at 4 at a quarter. The
++//! constant has 64 readers (most multiply by it), so it stays as it is;
++//! the three loads are pointed at a float of ours, written into the `int3`
++//! padding after +0x2226040's `ret` (+0x2226125). Each site's whole
++//! instruction is compared first.
++
++/// The switch's range in milliseconds: from the title's own 66.7 up to
++/// 333 (3 frames a second); longer steps mean more of the title's 1/15 s
++/// physics substeps in one frame.
++pub const MIN_MS: f32 = 66.7;
++pub const MAX_MS: f32 = 333.0;
++
++/// `VICTORY_MAX_STEP_MS=<ms>` parsed: `None` when unset, `Err` (the text)
++/// when malformed or out of range.
++pub fn parse_ms(spec: &str) -> Result<f32, String> {
++    match spec.trim().parse::<f32>() {
++        Ok(ms) if ms.is_finite() && (MIN_MS..=MAX_MS).contains(&ms) => Ok(ms),
++        _ => Err(format!(
++            "VICTORY_MAX_STEP_MS={spec}: expected milliseconds from {MIN_MS} to {MAX_MS} (e.g. 200)"
++        )),
++    }
++}
++
++/// Where our float goes: `int3` padding after +0x2226040's `ret`.
++pub const CONSTANT_AT: u32 = 0x222_6128;
++/// The title's 1/15 s.
++pub const TITLE_CONSTANT_AT: u32 = 0x615_9ec0;
++
++/// A load of the 1/15 s: `vmovss xmmN, [rip+disp32]`, 8 bytes, the
++/// displacement at +4.
++pub struct Load {
++    pub rva: u32,
++    pub bytes: [u8; 8],
++}
++
++pub const LOADS: [Load; 3] = [
++    // +0x2226040, the step of every timer: vmovss xmm3, [+0x6159ec0]
++    Load { rva: 0x222_6045, bytes: [0xc5, 0xfa, 0x10, 0x1d, 0x73, 0x3e, 0xf3, 0x03] },
++    // +0x22264d0, the paused branch's clamp: vmovss xmm0, [+0x6159ec0]
++    Load { rva: 0x222_6833, bytes: [0xc5, 0xfa, 0x10, 0x05, 0x85, 0x36, 0xf3, 0x03] },
++    // +0x8dec0, the world update's own clamp: vmovss xmm0, [+0x6159ec0]
++    Load { rva: 0x8_df76, bytes: [0xc5, 0xfa, 0x10, 0x05, 0x42, 0xbf, 0x0c, 0x06] },
++];
++
++/// The address a load's displacement leads to.
++pub fn load_target(rva: u32, bytes: &[u8; 8]) -> u32 {
++    let disp = i32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
++    (rva as i64 + 8 + disp as i64) as u32
++}
++
++/// The patches for `ms`: (rva, bytes expected, bytes written), the float
++/// first.
++pub fn patches(ms: f32) -> Vec<(u32, Vec<u8>, Vec<u8>)> {
++    let mut out = vec![(CONSTANT_AT, vec![0xcc; 4], (ms / 1000.0).to_le_bytes().to_vec())];
++    for load in &LOADS {
++        let disp = (CONSTANT_AT as i64 - (load.rva as i64 + 8)) as i32;
++        let mut new = load.bytes.to_vec();
++        new[4..].copy_from_slice(&disp.to_le_bytes());
++        out.push((load.rva, load.bytes.to_vec(), new));
++    }
++    out
++}
++
++/// The game timer (+0xabbef40): +0 its time in milliseconds (u32), +4 its
++/// frame count, +0xc the last step in seconds (f32).
++pub const GAME_TIMER: u32 = 0xabb_ef40;
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn the_loads_read_the_titles_fifteenth_and_then_ours() {
++        for load in &LOADS {
++            assert_eq!(load_target(load.rva, &load.bytes), TITLE_CONSTANT_AT, "{:#x}", load.rva);
++        }
++        let p = patches(200.0);
++        assert_eq!(p[0].0, CONSTANT_AT);
++        assert_eq!(f32::from_le_bytes(p[0].2[..].try_into().unwrap()), 0.2);
++        for (rva, old, new) in &p[1..] {
++            assert_eq!(old.len(), new.len());
++            assert_eq!(old[..4], new[..4], "same instruction, other displacement");
++            let new: [u8; 8] = new[..].try_into().unwrap();
++            assert_eq!(load_target(*rva, &new), CONSTANT_AT);
++        }
++        // The float sits in the padding after +0x2226040's ret (+0x2226125)
++        // and before the next function (+0x2226130).
++        assert!(CONSTANT_AT > 0x222_6125 && CONSTANT_AT + 4 <= 0x222_6130);
++    }
++
++    #[test]
++    fn the_switch_range() {
++        assert_eq!(parse_ms(" 200 "), Ok(200.0));
++        assert_eq!(parse_ms("66.7"), Ok(66.7));
++        assert!(parse_ms("50").is_err());
++        assert!(parse_ms("1000").is_err());
++        assert!(parse_ms("fast").is_err());
++        assert!(parse_ms("NaN").is_err());
++    }
++}
+diff --git a/crates/victory-loader/src/resolution.rs b/crates/victory-loader/src/resolution.rs
+index 913220c..6c8e6b9 100644
+--- a/crates/victory-loader/src/resolution.rs
++++ b/crates/victory-loader/src/resolution.rs
+@@ -312,6 +312,36 @@ pub unsafe fn write(base: usize, size: usize, site: &Site, code: &[u8]) -> Patch
+     Patched::Done
+ }
+ 
++/// Writes every `(rva, old, new)` of `patches` into the image of `size`
++/// bytes at `base`, only if every `old` is what is there (all or nothing:
++/// another build of the title is left as it is). `Err` says which differs.
++///
++/// # Safety
++/// The image stays mapped and no thread runs its code yet.
++#[cfg(windows)]
++pub unsafe fn write_all_checked(base: usize, size: usize, patches: &[(u32, Vec<u8>, Vec<u8>)]) -> Result<(), String> {
++    for (rva, old, new) in patches {
++        let at = *rva as usize;
++        if new.len() > old.len() || at.checked_add(old.len()).is_none_or(|end| end > size) {
++            return Err(format!("+{rva:#x}: outside the image or longer than the bytes compared"));
++        }
++        // SAFETY: inside the mapped image (checked above).
++        let there = unsafe { std::slice::from_raw_parts((base + at) as *const u8, old.len()) };
++        if there != &old[..] {
++            return Err(format!("+{rva:#x}: the title's bytes there are not the ones expected (another build?)"));
++        }
++    }
++    for (rva, old, new) in patches {
++        let site = Site { at: *rva as usize, what: "checked patch", bytes: old.clone().leak() };
++        // SAFETY: the caller's promise; compared above.
++        match unsafe { write(base, size, &site, new) } {
++            Patched::Done => {}
++            other => return Err(format!("+{rva:#x}: {other:?}")),
++        }
++    }
++    Ok(())
++}
++
+ /// Applies what the switches ask for; a line each in the log and on
+ /// standard output.
+ ///
+-- 
+2.43.0
+

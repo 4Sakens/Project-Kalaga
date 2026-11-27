@@ -1,0 +1,29 @@
+From c524321f6ab654d687ea672aca1ac7f74e5bc7e2 Mon Sep 17 00:00:00 2001
+From: Jackster <1049919+Jackster@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 22:15:04 -0500
+Subject: [PATCH] warm: create the pipelines folder on a fresh cache
+
+Ported from Belobug #456 (code only: VIctory-RDNA's warm.rs differs and has no warm_bad.rs test file). On a cache the title has never written to, <cache>\pipelines does not exist, and warm failed opening warm-done.txt inside it (os error 3). folder() now creates it.
+---
+ apps/victory/src/warm.rs | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/apps/victory/src/warm.rs b/apps/victory/src/warm.rs
+index 3efee63..fa1c0ef 100644
+--- a/apps/victory/src/warm.rs
++++ b/apps/victory/src/warm.rs
+@@ -23,7 +23,10 @@ const SLOW_MS: f64 = 1000.0;
+ 
+ fn folder() -> Result<PathBuf> {
+     let cfg = victory_core::Config::load()?;
+-    Ok(cfg.cache_subdir("shaders")?.with_file_name("pipelines"))
++    let dir = cfg.cache_subdir("shaders")?.with_file_name("pipelines");
++    // The recorder makes this folder during a run; `warm` comes first.
++    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
++    Ok(dir)
+ }
+ 
+ pub fn run(jobs: Option<usize>, limit: Option<usize>, again: bool, used: bool, these: Option<String>) -> Result<()> {
+-- 
+2.43.0
+

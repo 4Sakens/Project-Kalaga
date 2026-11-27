@@ -1,0 +1,220 @@
+From f15b74c24ff0a00f269abe16ab1b1d9b4369a956 Mon Sep 17 00:00:00 2001
+From: Geckomacabre <91030858+Geckomacabre@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 22:03:06 -0500
+Subject: [PATCH] Series S: both upscaler choices return the title's own
+ upscaler on the known build
+
+On a Series S the title can pick AMD FidelityFX (type 7) instead of its own
+upscaler (type 6). FidelityFX's output never reaches the screen here and its DLL is
+refused by the host policy ("a host DLL outside the host policy: refused
+amd_fidelityfx_upscaler_xbox.dll"), so the world stays black. VICTORY_UPSCALER=6
+patched only the picker (+0x7e93f0); the title asks a per-frame copy of it
+(+0x5400190) again every frame.
+
+- KNOWN_BUILDS gets the master build's hash.
+- With --console series-s and that build, the picker and its per-frame copy (now a
+  site of its own, 32 bytes compared) return 6. VICTORY_UPSCALER=<kind> still
+  overrides, now at both sites; VICTORY_TITLE_PATCHES=0 leaves the title's choice,
+  =1 applies it on any console.
+- Log: 'resolution: upscaler picker (the per-frame copy) (returns 6) ... Done'.
+
+From fxceless/victory-fork #798 by KyleS98 (both sites).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ apps/victory/src/run.rs                 | 32 +++++++++++++++++--
+ crates/victory-game/src/lib.rs          | 24 ++++++++++++--
+ crates/victory-loader/src/resolution.rs | 42 ++++++++++++++++++++++---
+ 3 files changed, 90 insertions(+), 8 deletions(-)
+
+diff --git a/apps/victory/src/run.rs b/apps/victory/src/run.rs
+index ed9b7ed..e0eb1de 100644
+--- a/apps/victory/src/run.rs
++++ b/apps/victory/src/run.rs
+@@ -61,10 +61,15 @@ pub fn run(
+     let original = std::fs::read(exe).with_context(|| format!("reading {}", exe.display()))?;
+     let mut prepared = victory_loader::prepare(&original)?;
+     let hash = prepared.original_hash.to_hex();
+-    match victory_game::identify(&hash) {
++    let build = victory_game::identify(&hash);
++    match build {
+         Some(build) => println!("build          {} ({hash})", build.label),
+         None => println!("build          unknown ({hash})"),
+     }
++    // The known build's Series S upscaler choice (victory-loader's
++    // `resolution`): both pickers return the title's own upscaler.
++    let upscaler_default = build.is_some()
++        && known_patches_on(console, std::env::var("VICTORY_TITLE_PATCHES").ok().as_deref());
+ 
+     let images = cfg.cache_subdir("images")?;
+     victory_hle::modules::d3d12x::use_shader_cache(cfg.cache_subdir("shaders")?);
+@@ -232,7 +237,7 @@ pub fn run(
+     if execute && fsr.is_none() {
+         let size = image.info().size_of_image as usize;
+         // SAFETY: the image stays mapped and nothing of it has run yet.
+-        unsafe { victory_loader::resolution::apply_asked(image.base(), size) };
++        unsafe { victory_loader::resolution::apply_asked(image.base(), size, upscaler_default) };
+     }
+     if !execute {
+         println!("not executing (pass --execute to start the title)");
+@@ -539,10 +544,33 @@ impl LoaderLock {
+     }
+ }
+ 
++/// Whether the known build's Series S upscaler choice applies, given
++/// `VICTORY_TITLE_PATCHES` (`var`): `0` never, `1` on any console; unset
++/// (or anything else), only with `--console series-s`. On a Series X the
++/// pickers already return what is written.
++fn known_patches_on(console: Console, var: Option<&str>) -> bool {
++    match var.map(str::trim) {
++        Some("0") => false,
++        Some("1") => true,
++        _ => matches!(console, Console::SeriesS),
++    }
++}
++
+ #[cfg(test)]
+ mod absent_tests {
+     use super::absent_title_dlls;
+ 
++    /// The known build's upscaler choice: on with `--console series-s`, off
++    /// on a Series X unless asked for, and off everywhere with `0`.
++    #[test]
++    fn title_patches_follow_the_console_and_the_switch() {
++        use super::{Console, known_patches_on};
++        assert!(known_patches_on(Console::SeriesS, None));
++        assert!(!known_patches_on(Console::SeriesX, None));
++        assert!(!known_patches_on(Console::SeriesS, Some("0")));
++        assert!(known_patches_on(Console::SeriesX, Some("1")));
++    }
++
+     #[test]
+     fn title_dlls_missing_from_the_folder_are_named_once() {
+         // The host provides kernel32, our runtime d3d12_xs; the rest are the
+diff --git a/crates/victory-game/src/lib.rs b/crates/victory-game/src/lib.rs
+index affa682..3a74dbd 100644
+--- a/crates/victory-game/src/lib.rs
++++ b/crates/victory-game/src/lib.rs
+@@ -14,8 +14,13 @@ pub struct KnownBuild {
+     pub blake3: &'static str,
+ }
+ 
+-/// Builds we support. Empty until the executable is available.
+-pub const KNOWN_BUILDS: &[KnownBuild] = &[];
++/// Builds we support. The layer changes nothing of the title's code by the
++/// hash alone; what it changes is compared byte for byte first (e.g.
++/// victory-loader's `resolution`).
++pub const KNOWN_BUILDS: &[KnownBuild] = &[KnownBuild {
++    label: "Xbox Series master",
++    blake3: "b99f876b74d4a77f03af5f878223b27bd647b5c35a79d5decd9f716504239e93",
++}];
+ 
+ /// Looks up a build by the BLAKE3 hash of its executable.
+ pub fn identify(blake3_hex: &str) -> Option<&'static KnownBuild> {
+@@ -23,3 +28,18 @@ pub fn identify(blake3_hex: &str) -> Option<&'static KnownBuild> {
+         .iter()
+         .find(|b| b.blake3.eq_ignore_ascii_case(blake3_hex))
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn known_builds_are_well_formed() {
++        for build in KNOWN_BUILDS {
++            assert_eq!(build.blake3.len(), 64);
++            assert!(build.blake3.bytes().all(|b| b.is_ascii_hexdigit()));
++            assert_eq!(identify(&build.blake3.to_uppercase()).map(|b| b.label), Some(build.label));
++        }
++        assert!(identify("00").is_none());
++    }
++}
+diff --git a/crates/victory-loader/src/resolution.rs b/crates/victory-loader/src/resolution.rs
+index 0c81026..913220c 100644
+--- a/crates/victory-loader/src/resolution.rs
++++ b/crates/victory-loader/src/resolution.rs
+@@ -35,8 +35,10 @@
+ //!   in its padding (as pull request #53 did). That one is not safe: at 0.5
+ //!   on Series S (run res-6) FidelityFX's jitter phase count came back 0 and
+ //!   the title divided by it (+0x28f03e8) 49 s in.
+-//! - **Upscaler.** `VICTORY_UPSCALER=<kind>` makes the picker return
+-//!   `kind` (pull request #53): 6 the title's own, 7 FidelityFX.
++//! - **Upscaler.** `VICTORY_UPSCALER=<kind>` makes the picker and its
++//!   per-frame copy (+0x5400190) return `kind` (pull request #53): 6 the
++//!   title's own, 7 FidelityFX. On a Series S of the known build both return
++//!   6 without it (`VICTORY_TITLE_PATCHES=0` leaves them; `=1` on any console).
+ 
+ use crate::frame_rate::Patched;
+ 
+@@ -187,6 +189,27 @@ pub const PICKER: Site = Site {
+     ],
+ };
+ 
++/// The picker's per-frame copy, +0x5400190 (its first 32 bytes): the
++/// title asks it again every frame, so with only [`PICKER`] changed a
++/// Series S still switches to FidelityFX. (victory-fork #798, by KyleS98.)
++pub const PICKER_FRAME: Site = Site {
++    at: 0x540_0190,
++    what: "upscaler picker (the per-frame copy)",
++    bytes: &[
++        0x48, 0x83, 0xec, 0x28, 0x48, 0x8b, 0x05, 0xb5, 0xe2, 0x1d, 0x02, 0x48, 0x8d, 0x0d, 0x5e, 0x00, 0x00, 0x00, 0x48, 0x8b,
++        0x80, 0xa8, 0x00, 0x00, 0x00, 0x48, 0x39, 0xc8, 0x75, 0x3c, 0xe8, 0x4d,
++    ],
++};
++
++/// The upscaler both pickers are made to return: `VICTORY_UPSCALER` if set;
++/// else, on a Series S of the known build (`series_s_default`), 6, the
++/// title's own: FidelityFX's (7) output never reaches the screen here, and
++/// its DLL is refused by the host policy, so the world stays black.
++/// `VICTORY_TITLE_PATCHES=0` leaves the title's choice alone.
++pub fn upscaler_kind(asked: Option<u32>, series_s_default: bool) -> Option<u32> {
++    asked.or(series_s_default.then_some(6))
++}
++
+ /// `rel32` from the end of an instruction at image offset `next` to `to`.
+ fn rel(to: usize, next: usize) -> [u8; 4] {
+     ((to as i64 - next as i64) as i32).to_le_bytes()
+@@ -296,7 +319,7 @@ pub unsafe fn write(base: usize, size: usize, site: &Site, code: &[u8]) -> Patch
+ /// The image of `size` bytes at `base` stays mapped and no thread runs its
+ /// code yet.
+ #[cfg(windows)]
+-pub unsafe fn apply_asked(base: usize, size: usize) {
++pub unsafe fn apply_asked(base: usize, size: usize, series_s_default: bool) {
+     let mut asked: Vec<(&Site, Vec<u8>, String)> = Vec::new();
+     if let Some((w, h)) = asked_output() {
+         asked.push((&OUTPUT, output_code(w, h), format!("{w}x{h}")));
+@@ -310,8 +333,9 @@ pub unsafe fn apply_asked(base: usize, size: usize) {
+     if let Some(s) = asked_ffx_scale() {
+         asked.push((&FFX_SCALE, ffx_scale_code(s), format!("{s}")));
+     }
+-    if let Some(kind) = asked_upscaler() {
++    if let Some(kind) = upscaler_kind(asked_upscaler(), series_s_default) {
+         asked.push((&PICKER, picker_code(kind), format!("returns {kind}")));
++        asked.push((&PICKER_FRAME, picker_code(kind), format!("returns {kind}")));
+     }
+     for (site, code, value) in asked {
+         // SAFETY: the caller's promise.
+@@ -402,9 +426,19 @@ mod tests {
+         let changed: Vec<usize> = (0..ffx.len()).filter(|&i| ffx[i] != FFX_SCALE.bytes[i]).collect();
+         assert!(changed.iter().all(|&i| (0x2c..0x30).contains(&i) || (0x36..0x3a).contains(&i) || (0x64..0x68).contains(&i)));
+         assert_eq!(picker_code(7), [0xb8, 7, 0, 0, 0, 0xc3]);
++        assert!(picker_code(6).len() <= PICKER_FRAME.bytes.len());
++        assert_eq!(PICKER_FRAME.bytes[..6], [0x48, 0x83, 0xec, 0x28, 0x48, 0x8b]);
+         assert_eq!(pool_check_code(), [0x48, 0x3d, 0xff, 0xff, 0x1f, 0x00, 0xeb, 0x01]);
+     }
+ 
++    #[test]
++    fn series_s_takes_the_titles_own_upscaler_unless_asked() {
++        assert_eq!(upscaler_kind(None, true), Some(6));
++        assert_eq!(upscaler_kind(None, false), None);
++        assert_eq!(upscaler_kind(Some(7), true), Some(7));
++        assert_eq!(upscaler_kind(Some(6), false), Some(6));
++    }
++
+     #[cfg(windows)]
+     #[test]
+     fn a_site_is_written_only_over_its_bytes() {
+-- 
+2.43.0
+
