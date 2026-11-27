@@ -43,7 +43,8 @@ next to #363's, which both add at the same place).
 | 0008 | Belobug #386 | Under memory pressure (≤ 3 GiB free RAM or ≤ 4 GiB commit) idle upload/staging memory is trimmed. With `VICTORY_RESIDENCY=1` (the rx7600-rdna presets) texture prefetch is also limited while under pressure | memory | always / with residency |
 | 0009 (belobug) | Belobug #394 | Five memory switches for 32 GB PCs (resident waits for textures only, keep percent, staging in BAR, pressure by physical memory, windows BAR percent) | memory | all off by default |
 | 0009/0010 | Belobug #410 | A pipeline still being made costs the full 500 ms wait only in its first frame | stutter | `VICTORY_PIPELINE_WAIT_AGAIN_MS=n` (off) |
-| last | Belobug #426 | XMA audio decoder at higher thread priority: no crackle when the CPU is busy (matters on 6 cores) | audio | always |
+| 0011 (rdna) / 0012 (belobug) | fxceless/victory-fork d036cea8 (#1366), what Vice-Tay #92 follows | **Device lost:** the fence then reads u64::MAX, and the relay took every flight as run and copied what the dead card's buffers held into title memory (a confusing crash later). A failed fence wait was ignored. Both now stop with a message naming the device removal. Ported by hand (Vice-Tay's own #92 only guards a readback pool these trees lack) | stability | always |
+| 0010 (rdna) / 0011 (belobug) | Belobug #426 | XMA audio decoder at higher thread priority: no crackle when the CPU is busy (matters on 6 cores) | audio | always |
 
 The presets do not turn the new switches on: none has a measured value yet.
 To test one, put it in `[launch.extra_env]`, e.g. `VICTORY_LIST_IDLE_TRIM_S = '30'`.
@@ -56,6 +57,8 @@ To test one, put it in `[launch.extra_env]`, e.g. `VICTORY_LIST_IDLE_TRIM_S = '3
 | Belobug #335 lazy list allocator retirement | No switch, no description, overlaps #372 |
 | Belobug #394 on RDNA | Does not apply (RDNA changed the same lines) |
 | Vice-Tay #103 held window copies counted in the RAM budget | Does not apply to either tree. Means `VICTORY_WINDOW_BUDGET_MB` (in the presets) may release less than set; harmless |
-| Vice-Tay #109 integer bits in typed buffer stores, #113 cached mip publishing, #92 device-removal fence, #91, #111 | Do not apply; need porting by hand. #109 and #92 are the ones worth it |
+| Vice-Tay #109 integer bits in typed buffer stores | **Not needed:** it fixes Vice-Tay's NaN guard, which zeroed integers that look like NaN. VIctory-RDNA and Belobug have no NaN guard; their typed stores pass the bits through unchanged (a bitcast) |
+| Vice-Tay #92 readback pool + device-removal check | The pool is Vice-Tay only; the device-removal fix it follows is ported from victory-fork instead (0011/0012 above) |
+| Vice-Tay #113 cached mip publishing, #91, #111 | Do not apply; depend on Vice-Tay-only code |
 | Belobug #432 frame-rate samples for benchmarks | Useful for a future `kalaga bench`; not needed to play |
 | Geometry shaders (#433), DualSense (#420, #367), Wine (#421), RDNA4 compiler (#422), translations, docs, tests-only PRs | Not about this PC or not about playing |
