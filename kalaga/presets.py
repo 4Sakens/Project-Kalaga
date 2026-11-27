@@ -182,6 +182,14 @@ _RDNA_FAST = {
     "VICTORY_RESIDENCY": "1",
     "VICTORY_SYNC_FINE": "1",
 }
+# Renderer port 1 keeps indirect executions that read the title's memory in
+# place in order (each clamped right before it runs). VIctory-RDNA's own
+# preset turned this off on 2026-11-27 (8ba4f34) for speed; its code says that
+# with it off palms and trees went missing for runs of frames while the camera
+# moved, and its README now lists distant vegetation flicker. Picture first:
+# on here, explicitly.
+_RDNA_ORDER = {"VICTORY_PORT_CONSTANTS_ORDER": "1"}
+_RDNA_FAST.update(_RDNA_ORDER)
 _RDNA_SAFE = {
     "VICTORY_UNDER_WIDE": "0",
     "VICTORY_LAND_ECHO": "0",

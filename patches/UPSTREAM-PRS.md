@@ -100,3 +100,40 @@ port 2 rework above; Vice-Tay 3fe4811, 5307ba7, 7993c1b, e95a2f5, a550e0c
 conflict with code these trees changed differently. Vice-Tay 2b51c6c (21 → 6
 fps from exact copies of structured views) concerns cards without raw-twin
 heaps (its RTX 4090); not this tree's path on AMD.
+
+## Fourth pass (2026-11-27 morning)
+
+**VIctory-RDNA moved** `2c5a395` → `68402ce` (merged AvatarManz 014d52d: the
+port 1/2 ordering and prelude-texture fixes; an RX 7900 XT run of 23 min 50 s
+at 20.8 fps median, 30.8 peak, 20.3 in heavy scenes). The rdna series is
+re-pinned there: seven of its patches are now upstream and were dropped
+(4da7c0b, 8eaf2dc, 4aeb6d0, 631400f, 3e04ca0, 15c3d0e, 5d6bd84); Vice-Tay
+7168410 was ported by hand onto the new `Pending::make` (it skips keys the
+driver's compiler crashed on; a Rust panic in one build is now caught too).
+
+VIctory-RDNA's preset now sets `VICTORY_PORT_CONSTANTS_ORDER=0` (8ba4f34),
+for speed. Its code says that with it off palms and trees went missing for
+runs of frames while the camera moved; its README lists distant vegetation
+flicker. Kalaga's presets set it to `1`. Its preset also sets
+`VICTORY_THIN_THREADS=14` (+2.8 fps on a 24-thread CPU); not copied for a
+12-thread 5600X (the session's `-6core` run tests the other direction).
+
+New Belobug PRs taken (single commits, authors kept):
+
+| PR | What | rdna | belobug |
+|---|---|---|---|
+| #460 | Two GPU reads that aborted instead of failing gracefully | yes | yes |
+| #475 | A damaged shader operand no longer panics (parsers fuzzed in tests) | yes | yes |
+| #552 | Device removal handled in the keep-awake fence | yes | yes |
+| #612 | Shader translation: root constants' dword 0 as a dynamic offset | yes | yes |
+| #614 | VRAM accounting and eviction count mapped tile bytes of levels-on-demand textures: **8 GB** | yes | yes |
+| #548 | Only the indexed-texture batch due this pass is selected (CPU) | yes | yes |
+| #560 | Matching copy-queue upload buffers reused (CPU, memory) | yes | yes |
+| #565 | Straddling 16-bit global loads joined across dwords (picture) | no (does not apply) | yes |
+| #569 | In-place memory turned on only after the host heap is checked coherent | no (does not apply) | yes |
+| #537 | Idle thin recording buffers bounded by bytes (memory) | no (does not apply) | yes |
+
+Looked at, do not apply to either yet (worth porting when upstream settles):
+#470 failed texture detile retried, #618 LDS index clamp, #577 join EXEC
+restore, #623 v_cube denormals, #555 texture-cache staging files, #497 XMA
+audio on slow frames.

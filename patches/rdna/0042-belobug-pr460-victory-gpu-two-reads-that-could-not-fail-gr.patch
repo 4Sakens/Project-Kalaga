@@ -1,0 +1,160 @@
+From f8d98a5f62db955076105093961c2796d5315f2d Mon Sep 17 00:00:00 2001
+From: Jackster <1049919+Jackster@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 03:15:12 +0000
+Subject: [PATCH] victory-gpu: two reads that could not fail gracefully
+
+shader_cache's converter sliced `&input[32..]`, assuming every entry
+opens with the build fingerprint written by `build()`; a key shorter than
+that panicked inside a converter. Name the fingerprint's length once and
+turn a short key into the ordinary error a converter returns; a unit test
+covers the short key.
+
+set_name walked game-supplied UTF-16 until a NUL, unbounded and without
+fault safety, inside an extern "system" callback: a stale or unterminated
+pointer read until it faulted, and that aborts the game. Read at most
+2 KiB through the crate's fault-safe reader, stop at the first NUL, and
+use an empty name with a debug line when the pointer is not readable. The
+call still returns S_OK everywhere: names only reach our log.
+---
+ crates/victory-gpu/src/object.rs       | 31 ++++++++++++++++++++---
+ crates/victory-gpu/src/shader_cache.rs | 35 ++++++++++++++++++++++----
+ 2 files changed, 57 insertions(+), 9 deletions(-)
+
+diff --git a/crates/victory-gpu/src/object.rs b/crates/victory-gpu/src/object.rs
+index 6671d4b..10b26b6 100644
+--- a/crates/victory-gpu/src/object.rs
++++ b/crates/victory-gpu/src/object.rs
+@@ -221,15 +221,38 @@ pub(crate) const fn d3d12_object<const N: usize>(mut f: [*const (); N]) -> [*con
+     f
+ }
+ 
++/// The most UTF-16 units [`set_name`] reads: 2 KiB. D3D12 names are short
++/// debug strings, so no real one comes near this; the bound is what keeps a
++/// stale or unterminated name pointer from walking memory without end.
++const MAX_NAME_UNITS: usize = 1024;
++
+ /// The object methods' name setter: names only reach our log.
+ pub(crate) extern "system" fn set_name(this: This, name: *const u16) -> HRESULT {
+     let name = if name.is_null() {
+         String::new()
+     } else {
+-        // SAFETY: a non-null name is NUL-terminated UTF-16.
+-        let len = (0..).take_while(|&i| unsafe { *name.add(i) } != 0).count();
+-        // SAFETY: `len` units were just read.
+-        String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(name, len) })
++        // The title passes a NUL-terminated UTF-16 string, but the pointer
++        // may have gone stale by now. `read_there` touches only mapped
++        // memory and reports how much of it it could read: no unsafe here,
++        // and a bad pointer costs an empty name in our log instead of
++        // faulting inside the title's call.
++        let mut bytes = [0u8; MAX_NAME_UNITS * 2];
++        let got = crate::host::read_there(name.cast(), &mut bytes);
++        let units: Vec<u16> = bytes[..got & !1]
++            .chunks_exact(2)
++            .map(|unit| u16::from_le_bytes([unit[0], unit[1]]))
++            .collect();
++        match units.iter().position(|&unit| unit == 0) {
++            Some(end) => String::from_utf16_lossy(&units[..end]),
++            // Nothing readable, or the readable memory ended before the
++            // string did: no name we can use.
++            None if got < bytes.len() => {
++                tracing::debug!(object = ?this, "object name unreadable");
++                String::new()
++            }
++            // Longer than any real name: keep what the bound allows.
++            None => String::from_utf16_lossy(&units),
++        }
+     };
+     tracing::debug!(object = ?this, %name, "named");
+     S_OK
+diff --git a/crates/victory-gpu/src/shader_cache.rs b/crates/victory-gpu/src/shader_cache.rs
+index ba58e4c..1f5fc1f 100644
+--- a/crates/victory-gpu/src/shader_cache.rs
++++ b/crates/victory-gpu/src/shader_cache.rs
+@@ -26,6 +26,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+ /// The encoding of entries ([`encode`]), part of the key.
+ const FORMAT: u32 = 2;
+ 
++/// The build fingerprint ([`build`]) that opens every cache key, in bytes.
++const BUILD_LEN: usize = 32;
++
+ use victory_pipeline::{Cache, Converter};
+ use victory_shader::emit::{HostShader, StaticSampler, UserData};
+ use victory_shader::resource::RootIndexedView;
+@@ -83,7 +86,7 @@ pub fn stale_counts() -> (u64, u64, u64) {
+ /// entries, the settings it runs with, and what it was told of the host.
+ /// Not our executable: a rebuild of anything else used to translate every
+ /// shader again.
+-fn build() -> [u8; 32] {
++fn build() -> [u8; BUILD_LEN] {
+     // The view heap's null slot differs by host GPU: a translation cached
+     // without the clamp must not be served (`host_settings` below).
+     crate::descriptor::host::probe_view_limit();
+@@ -155,7 +158,7 @@ fn build() -> [u8; 32] {
+ }
+ 
+ /// What tells one set of translations from another ([`build`]).
+-pub(crate) fn translation() -> [u8; 32] {
++pub(crate) fn translation() -> [u8; BUILD_LEN] {
+     build()
+ }
+ 
+@@ -204,7 +207,15 @@ impl<F: Fn(&[u8]) -> Result<HostShader, String> + Send + Sync> Converter for Tra
+     }
+     fn convert(&self, input: &[u8]) -> anyhow::Result<Vec<u8>> {
+         self.ran.store(true, Ordering::Relaxed);
+-        let shader = (self.translate)(&input[32..]).map_err(anyhow::Error::msg)?;
++        // The build fingerprint [`build`] wrote; an entry that does not
++        // start with a whole one is not one of ours.
++        let container = input.get(BUILD_LEN..).ok_or_else(|| {
++            anyhow::anyhow!(
++                "cache key of {} bytes is shorter than its {BUILD_LEN}-byte build prefix",
++                input.len()
++            )
++        })?;
++        let shader = (self.translate)(container).map_err(anyhow::Error::msg)?;
+         Ok(encode(&shader, self.source))
+     }
+ }
+@@ -213,7 +224,7 @@ impl<F: Fn(&[u8]) -> Result<HostShader, String> + Send + Sync> Converter for Tra
+ /// translated again (and replaced) rather than served.
+ fn cached(
+     cache: &Cache,
+-    build: &[u8; 32],
++    build: &[u8; BUILD_LEN],
+     container: &[u8],
+     translate: impl Fn(&[u8]) -> Result<HostShader, String> + Send + Sync,
+     refresh: bool,
+@@ -224,7 +235,7 @@ fn cached(
+ /// [`cached`] with the build of the translator given (`source`).
+ fn cached_by(
+     cache: &Cache,
+-    build: &[u8; 32],
++    build: &[u8; BUILD_LEN],
+     source: &str,
+     container: &[u8],
+     translate: impl Fn(&[u8]) -> Result<HostShader, String> + Send + Sync,
+@@ -539,6 +550,20 @@ mod tests {
+         files
+     }
+ 
++    /// A key without a whole build fingerprint is an ordinary error, not a
++    /// panic: the converter is what an entry that does not parse is fed.
++    #[test]
++    fn a_key_shorter_than_the_build_fingerprint_is_an_error() {
++        let translate = |_: &[u8]| -> Result<HostShader, String> { Ok(shader()) };
++        let converter = Translate {
++            translate,
++            source: "build",
++            ran: AtomicBool::new(false),
++        };
++        let error = converter.convert(b"short").unwrap_err();
++        assert!(error.to_string().contains("shorter"), "{error}");
++    }
++
+     #[test]
+     fn entries_round_trip_and_reject_damage() {
+         let bytes = encode(&shader(), "made by");
+-- 
+2.43.0
+
