@@ -307,6 +307,8 @@ def cmd_prepare(args) -> int:
     """
 
     cfg = _cfg(args)
+    if args.preset:
+        cfg.launch.preset = args.preset
     directory = _ensure_game_dir(cfg)
     scan = gamefs.scan(
         directory,
@@ -324,14 +326,20 @@ def cmd_prepare(args) -> int:
         print("victory is not built; run `kalaga build` first", file=sys.stderr)
         return EXIT_NOT_READY
     launch.stage_dependencies(assessment, cfg)
-    run_env = dict(os.environ)
+    # The same switches as the launch: translations are cached per switch
+    # set (VICTORY_PORT_CBV, VICTORY_SHADER_LOOP_LIMIT, ...), so warming
+    # with other switches would fill a cache the run never reads.
+    preset = presets.get(cfg.launch.preset) if cfg.launch.preset else None
+    run_env, notes = launch.victory_env(cfg, preset)
+    for note in notes:
+        print(f"note    : {note}")
+    if not preset:
+        print("note    : no preset: the cache matches only launches without one too")
     cwd = str(assessment.executable.parent)
     runtime_toml = Path(cfg.runtime.victory_dir) / "victory.toml"
     if runtime_toml.is_file():
         run_env.setdefault("VICTORY_CONFIG", str(runtime_toml))
         cwd = cfg.runtime.victory_dir
-    if cfg.runtime.dxc_dir:
-        run_env["VICTORY_DXC_DIR"] = cfg.runtime.dxc_dir
     if scan.directory:
         run_env.setdefault("VICTORY_GAME_DIR", str(scan.directory))
     exe = str(assessment.executable)
@@ -459,6 +467,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("prepare", parents=[common],
                        help="translate shaders and build recorded pipelines ahead of a run")
+    p.add_argument("--preset", choices=sorted(presets.PRESETS),
+                   help="the preset you will launch with (default: [launch] preset)")
     p.add_argument("--skip-shaders", action="store_true")
     p.add_argument("--skip-warm", action="store_true")
     p.add_argument("--dry-run", action="store_true")

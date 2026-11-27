@@ -70,6 +70,37 @@ def stage_dependencies(assessment: Assessment, cfg: Config) -> list[Path]:
     return staged
 
 
+def victory_env(cfg: Config, preset: presets.Preset | None) -> tuple[dict[str, str], list[str]]:
+    """The environment a victory process gets: inherited, preset, extra_env.
+
+    With a preset, inherited VICTORY_* switches are dropped (paths kept), as
+    Belobug's play.ps1 does: a shell that still has, say, the old fork's
+    VICTORY_SKIP_PIPELINES from the README's AMD instructions would otherwise
+    leave 43 pipelines out of the Belobug runtime (missing effects).
+    ``launch`` and ``prepare`` both use this, so the shader cache they fill
+    matches (Belobug keys translations on switches such as VICTORY_PORT_CBV).
+    """
+
+    env = dict(os.environ)
+    notes: list[str] = []
+    if preset:
+        dropped = sorted(
+            k for k in env
+            if k.upper().startswith("VICTORY_") and k.upper() not in presets.PATH_VARIABLES
+        )
+        for key in dropped:
+            del env[key]
+        if dropped:
+            notes.append("preset: ignored inherited " + ", ".join(dropped)
+                         + " (put them in [launch.extra_env] to keep them)")
+        env.update(presets.environment(preset))
+        notes.append(f"preset {preset.name}: {preset.summary}")
+    if cfg.runtime.dxc_dir:
+        env["VICTORY_DXC_DIR"] = cfg.runtime.dxc_dir
+    env.update(cfg.launch.extra_env)
+    return env, notes
+
+
 def compose(assessment: Assessment, scan: gamefs.GameScan, cfg: Config) -> LaunchPlan:
     if assessment.executable is None:
         raise RuntimeError(
@@ -84,26 +115,21 @@ def compose(assessment: Assessment, scan: gamefs.GameScan, cfg: Config) -> Launc
     stamp = time.strftime("%Y%m%d-%H%M%S")
     log_path = logs / f"{assessment.runtime}-{stamp}.log"
 
-    env = dict(os.environ)
-    notes: list[str] = []
     cwd = str(Path(assessment.executable).parent)
 
     preset = presets.get(cfg.launch.preset) if cfg.launch.preset else None
 
     if assessment.runtime == "victory":
+        env, notes = victory_env(cfg, preset)
         console = cfg.launch.console or (preset.console if preset else "") or "series-x"
         argv = [str(assessment.executable), "run", title, "--execute"]
         argv += ["--console", console]
-        if preset:
-            env.update(presets.environment(preset))
-            notes.append(f"preset {preset.name}: {preset.summary}")
         if cfg.launch.log:
             env["VICTORY_LOG"] = cfg.launch.log
         if cfg.launch.warp:
             env["VICTORY_D3D12_WARP"] = "1"
             notes.append("software adapter (WARP): slow, but cannot reset the display driver")
         if cfg.runtime.dxc_dir:
-            env["VICTORY_DXC_DIR"] = cfg.runtime.dxc_dir
             env["XCL_DXC_DIR"] = cfg.runtime.dxc_dir
         # The runtime reads VICTORY_CONFIG, else ./victory.toml, so run from the
         # source checkout and point at its config explicitly.
@@ -112,7 +138,10 @@ def compose(assessment: Assessment, scan: gamefs.GameScan, cfg: Config) -> Launc
             env.setdefault("VICTORY_CONFIG", str(runtime_toml))
             cwd = str(Path(cfg.runtime.victory_dir))
         argv += cfg.launch.extra_args
+        env.update(cfg.launch.extra_env)  # still the last word, over VICTORY_LOG too
     else:
+        env = dict(os.environ)
+        notes = []
         if preset:
             notes.append(f"preset {preset.name} ignored: it is for the victory runtime")
         argv = [str(assessment.executable), "run", str(scan.directory)]
@@ -122,8 +151,7 @@ def compose(assessment: Assessment, scan: gamefs.GameScan, cfg: Config) -> Launc
             env["XCL_D3D12_WARP"] = "1"
             notes.append("software adapter requested (WARP)")
         argv += cfg.launch.extra_args
-
-    env.update(cfg.launch.extra_env)
+        env.update(cfg.launch.extra_env)
 
     return LaunchPlan(
         runtime=assessment.runtime,

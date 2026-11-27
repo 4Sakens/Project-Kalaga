@@ -24,7 +24,7 @@ quality/speed point with real numbers.
 
 | What | How | Why |
 |---|---|---|
-| No shader/pipeline stutter | `python -m kalaga prepare` after each build, and again after the first play session | Upstream lost 270-660 s of a session to frames over 200 ms while pipelines were made. `prepare` runs `victory shaders` (translate everything) and `victory warm` (build every pipeline recorded by `VICTORY_PIPELINE_BOOK=1`, which the presets now set) |
+| No shader/pipeline stutter | `python -m kalaga prepare --preset NAME` after each build, and again after the first play session, for each preset you play (translations are cached per switch set: `-fast` turns on `VICTORY_PORT_CBV`, which changes them) | Upstream lost 270-660 s of a session to frames over 200 ms while pipelines were made. `prepare` runs `victory shaders` (translate everything) and `victory warm` (build every pipeline recorded by `VICTORY_PIPELINE_BOOK=1`, which the presets now set) |
 | Idle memory released under pressure | `VICTORY_WINDOW_BUDGET_MB=1536` (in all Belobug presets) | Window copies grow 2.8 → 4.3 GB in eight minutes. The cap applies only when Windows reports memory pressure, and a dropped copy is re-made on its next read |
 | Commit headroom | Page file system-managed on the fastest SSD, 40+ GB free; close the browser/Discord | Belobug's memory bands use commit limit (RAM + page file). More headroom = fewer forced releases and no out-of-commit crash (error 1455) |
 | Driver | Latest Adrenalin; run from a normal (non-admin) window | Admin runs put the driver shader cache elsewhere, so the warm cache is missed |
@@ -33,8 +33,8 @@ quality/speed point with real numbers.
 
 | Preset | Picture | Expected cost |
 |---|---|---|
-| `rx7600-belobug-quality` | **Series X assets and settings**, drawn at native 1080p | Most VRAM (upstream 10.5 GB at 4K; 1080p is less, but probably still over 8 GB) |
-| `rx7600-belobug` | Series S profile (1080p output, lower internal res, smaller textures) | Fits 8 GB on the 8 GB-card forks; softer image |
+| `rx7600-belobug-quality` | **Series X assets and settings**, drawn at native 1920x1080 (`VICTORY_RENDER_SCALE=1.0`) | Most VRAM (upstream 10.5 GB at 4K; 1080p is less, but probably still over 8 GB). ~2.1 Mpx a frame, fewer than Series X's default 2560x1440 |
+| `rx7600-belobug` | Series S profile (1080p output from 1280x720, smaller textures) | Fits 8 GB on the 8 GB-card forks; softer image |
 
 If the quality preset holds 8 GB without textures arriving late or turning
 blurry, and is within ~20 % of the Series S fps, use it. If not, Series S.
@@ -49,7 +49,7 @@ about a third of the frame and more memory; the title's ambient stand-in
 
 | Preset | What it tries |
 |---|---|
-| `rx7600-belobug-6core` | Helper pools sized to 12 threads (list 4, compare 3, descriptors 3, pipeline workers 4) so they stop crowding the submit thread |
+| `rx7600-belobug-6core` | List and compare pools sized to 12 threads (4 and 3, from 8 and 6) so they stop crowding the submit thread. Pipeline workers and the descriptor pools are left at upstream's counts: fewer pipeline workers means draws left out longer (missing objects), and the submit thread waits on the descriptor pool |
 | `rx7600-belobug-fast` | The five `VICTORY_PORT_*` renderer patches: upstream −8 to −10 ms on the submit thread. Off by default upstream while tested; if anything looks wrong, drop back |
 
 These matter only if Step 2 shows the CPU is the limit. Check: GPU usage in
@@ -57,7 +57,9 @@ Task Manager below ~90 % while fps is low means CPU-bound.
 
 ## The test session (about 45 minutes, when home)
 
-1. `git pull`, then `python -m kalaga build` and `python -m kalaga prepare`.
+1. `git pull`, then `python -m kalaga build` and
+   `python -m kalaga prepare --preset rx7600-belobug` (and `--preset
+   rx7600-belobug-fast`: its shader translations differ).
 2. For each preset in this order: `-safe`, `rx7600-belobug`, `-quality`,
    `-6core`, `-fast`:
    `python -m kalaga launch --preset NAME`, load the same save, stand in the
@@ -66,7 +68,7 @@ Task Manager below ~90 % while fps is low means CPU-bound.
    Task Manager peak **RAM**, peak **Dedicated GPU memory**, GPU usage %, and
    whether textures were late, blurry or flickering. F3 shows the runtime's
    own frame panel.
-4. Run `python -m kalaga prepare` once more at the end (it now has the
+4. Run `python -m kalaga prepare --preset <the one you keep>` once more at the end (it now has the
    pipelines the sessions recorded).
 5. Send the table and the `logs/` folder. The presets get tuned from that.
 
@@ -78,8 +80,10 @@ Task Manager below ~90 % while fps is low means CPU-bound.
    windows 7 GB, uploads 4 GB. Candidates: a smaller idle-list pool
    (512 lists / 256 MB now) under the RAM bands, and the same budget idea for
    uploads. Measure with `VICTORY_MEMORY_MAP` in a `kalaga build --diag` run.
-3. **Texture streaming on 8 GB**: tune `VICTORY_TEXTURE_ROOM_PERCENT`
-   (85 now) from the dedicated-memory numbers; late textures mean too low,
+3. **Texture streaming on 8 GB**: `VICTORY_TEXTURE_ROOM_PERCENT` (upstream
+   default 90 % of the card's budget, which already counts buffers and render
+   targets, so it scales to 8 GB by itself). Change it only from the
+   dedicated-memory numbers; late textures mean too low,
    blur or device loss means too high.
 4. **Bring Kalaga's mouse-look and PC prompts over** only if Belobug's own
    `VICTORY_KBM_GTA=1` mapping falls short.

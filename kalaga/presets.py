@@ -67,12 +67,6 @@ _BELOBUG_PORT = {
     "VICTORY_PORT_GUARD": "1",
     "VICTORY_PORT_JOURNAL": "1",
 }
-# An 8 GB card: leave more of the budget to title buffers than the 90 % default
-# tuned on a 24 GB 7900 XTX.
-_EIGHT_GB = {
-    "VICTORY_TEXTURE_ROOM_PERCENT": "85",
-}
-
 # 32 GiB of RAM: under memory pressure (Windows' numbers, Belobug's
 # RamBand Watch/High), let idle copies of title windows go down to this many
 # bytes. Upstream saw them grow 2.8 -> 4.3 GB in eight minutes. A dropped copy
@@ -86,24 +80,30 @@ _PIPELINE_BOOK = {
     "VICTORY_PIPELINE_BOOK": "1",
 }
 # Pools sized for 6 cores / 12 threads. Upstream's fixed counts (8 list
-# threads, 6 compare, 6+4 descriptor, 8 pipeline workers) were set on a
-# 24-thread i9; on the 5600X they compete with the submit thread, which is
-# the wall. Untested here: an experiment, not a default.
+# threads, 6 compare threads) were set on a 24-thread i9; on the 5600X they
+# compete with the submit thread, which is the wall. Untested here: an
+# experiment, not a default. Left alone on purpose: VICTORY_VIEW_THREADS (it
+# also sizes the descriptor-record pool the submit thread waits on) and
+# VICTORY_PIPELINE_WORKERS (fewer workers = draws left out longer while
+# their pipelines are made: missing objects).
 _SIX_CORES = {
     "VICTORY_THIN_THREADS": "4",
     "VICTORY_UNDER_THREADS": "3",
-    "VICTORY_VIEW_THREADS": "3",
-    "VICTORY_PIPELINE_WORKERS": "4",
 }
-# Series X profile drawn by the title at 1080p: its full-quality settings
-# without the 4K target (upstream: about 16 ms less card time than 4K).
+# Series X profile at native 1080p. VICTORY_OUTPUT alone makes the title
+# draw at its 2/3 render scale (1280x720) and upscale; VICTORY_RENDER_SCALE
+# 1.0 (upstream run res-4) makes it draw all 1920x1080. That is ~2.1 Mpx a
+# frame, less than the Series X default (2560x1440 for 4K), and sharper than
+# Series S (also 720p internal at 1080p output).
 _SERIES_X_1080P = {
     "VICTORY_OUTPUT": "1920x1080",
+    "VICTORY_RENDER_SCALE": "1.0",
 }
 
-_BELOBUG_COMMON = {**_BELOBUG_BASE, **_EIGHT_GB, **_THIRTY_TWO_GB, **_PIPELINE_BOOK}
+_BELOBUG_COMMON = {**_BELOBUG_BASE, **_THIRTY_TWO_GB, **_PIPELINE_BOOK}
 
-# The fxceless/victory-fork switches measured in docs/pc-test.md (run 3).
+# The fxceless/victory-fork switches measured in docs/pc-test.md (run 3),
+# exactly: this preset is the known-good fallback (Series X, 0 removals).
 _FORK_PC_TEST = {
     "VICTORY_SHADER_LOOP_LIMIT": "256",
     "VICTORY_INPLACE_MB": "4096",
@@ -114,7 +114,6 @@ _FORK_PC_TEST = {
     "VICTORY_CARD_BUFFERS_MB": "1024",
     "VICTORY_JOIN_COPIES": "1",
     "VICTORY_CARD_REHASH_RUNS": "1",
-    "VICTORY_TEXTURE_NO_WAIT": "1",
 }
 
 PRESETS: dict[str, Preset] = {
@@ -122,14 +121,14 @@ PRESETS: dict[str, Preset] = {
     for p in (
         Preset(
             name="rx7600-belobug",
-            summary="Belobug runtime, Series S, play.ps1 settings, 8 GB texture room (recommended start)",
+            summary="Belobug runtime, Series S, the settings of Belobug's play.ps1 (recommended start)",
             checkout="belobug",
             console="series-s",
             env={**_BELOBUG_COMMON, **_BELOBUG_FAST_WAYS},
         ),
         Preset(
             name="rx7600-belobug-quality",
-            summary="Series X profile at 1080p: full-quality assets; needs the most VRAM",
+            summary="Series X profile drawn at native 1080p: sharpest picture; needs the most VRAM",
             checkout="belobug",
             console="series-x",
             env={**_BELOBUG_COMMON, **_BELOBUG_FAST_WAYS, **_SERIES_X_1080P},
@@ -157,14 +156,25 @@ PRESETS: dict[str, Preset] = {
         ),
         Preset(
             name="rx7600-fork",
-            summary="current fxceless/victory-fork checkout, Series S, docs/pc-test.md switches + AMD skips",
+            summary="current fxceless/victory-fork checkout, Series X, docs/pc-test.md run 3 + AMD skips",
             checkout="fork",
-            console="series-s",
+            console="series-x",
             env=dict(_FORK_PC_TEST),
             amd_skips=True,
         ),
     )
 }
+
+
+# Inherited variables a preset keeps: where files are, not how to run.
+PATH_VARIABLES = frozenset({
+    "VICTORY_CONFIG",
+    "VICTORY_GAME_DIR",
+    "VICTORY_CACHE_DIR",
+    "VICTORY_DATA_DIR",
+    "VICTORY_FIDELITYFX_DIR",
+    "VICTORY_DXC_DIR",
+})
 
 
 def get(name: str) -> Preset:

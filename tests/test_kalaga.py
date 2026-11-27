@@ -350,17 +350,50 @@ class LaunchTests(TempCase):
         result = launch.compose(assessment, scan, cfg)
         self.assertEqual(result.argv[result.argv.index("--console") + 1], "series-s")
         self.assertEqual(result.env["VICTORY_PORT_DESCRIPTORS"], "1")
-        self.assertEqual(result.env["VICTORY_TEXTURE_ROOM_PERCENT"], "85")
+        self.assertNotIn("VICTORY_TEXTURE_ROOM_PERCENT", result.env)
         self.assertTrue(any("rx7600-belobug-fast" in note for note in result.notes))
 
     def test_explicit_console_and_extra_env_beat_the_preset(self) -> None:
         cfg, scan, assessment = self._setup()
         cfg.launch.preset = "rx7600-belobug"
         cfg.launch.console = "series-x"
-        cfg.launch.extra_env = {"VICTORY_TEXTURE_ROOM_PERCENT": "80"}
+        cfg.launch.extra_env = {"VICTORY_WINDOW_BUDGET_MB": "1024", "VICTORY_LOG": "trace"}
         result = launch.compose(assessment, scan, cfg)
         self.assertEqual(result.argv[result.argv.index("--console") + 1], "series-x")
-        self.assertEqual(result.env["VICTORY_TEXTURE_ROOM_PERCENT"], "80")
+        self.assertEqual(result.env["VICTORY_WINDOW_BUDGET_MB"], "1024")
+        self.assertEqual(result.env["VICTORY_LOG"], "trace")
+
+    def test_preset_drops_inherited_switches_but_keeps_paths(self) -> None:
+        cfg, scan, assessment = self._setup()
+        cfg.launch.preset = "rx7600-belobug"
+        saved = dict(os.environ)
+        os.environ["VICTORY_SKIP_PIPELINES"] = "072f5fe96efd27e1"
+        os.environ["VICTORY_DATA_DIR"] = "D:\\victory-data"
+        try:
+            result = launch.compose(assessment, scan, cfg)
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+        self.assertNotIn("VICTORY_SKIP_PIPELINES", result.env)
+        self.assertEqual(result.env["VICTORY_DATA_DIR"], "D:\\victory-data")
+        self.assertTrue(any("VICTORY_SKIP_PIPELINES" in note for note in result.notes))
+
+    def test_no_preset_keeps_inherited_switches(self) -> None:
+        cfg, scan, assessment = self._setup()
+        saved = dict(os.environ)
+        os.environ["VICTORY_SKIP_PIPELINES"] = "072f5fe96efd27e1"
+        try:
+            result = launch.compose(assessment, scan, cfg)
+        finally:
+            os.environ.clear()
+            os.environ.update(saved)
+        self.assertEqual(result.env["VICTORY_SKIP_PIPELINES"], "072f5fe96efd27e1")
+
+    def test_fork_preset_is_the_measured_config(self) -> None:
+        from kalaga import presets
+        preset = presets.get("rx7600-fork")
+        self.assertEqual(preset.console, "series-x")
+        self.assertNotIn("VICTORY_TEXTURE_NO_WAIT", preset.env)
 
     def test_fork_preset_carries_the_amd_skips(self) -> None:
         cfg, scan, assessment = self._setup()
@@ -376,6 +409,7 @@ class LaunchTests(TempCase):
         result = launch.compose(assessment, scan, cfg)
         self.assertEqual(result.argv[result.argv.index("--console") + 1], "series-x")
         self.assertEqual(result.env["VICTORY_OUTPUT"], "1920x1080")
+        self.assertEqual(result.env["VICTORY_RENDER_SCALE"], "1.0")
         self.assertEqual(result.env["VICTORY_PIPELINE_BOOK"], "1")
         self.assertEqual(result.env["VICTORY_WINDOW_BUDGET_MB"], "1536")
 
@@ -384,6 +418,8 @@ class LaunchTests(TempCase):
         for name, preset in presets.PRESETS.items():
             env = presets.environment(preset)
             self.assertEqual("VICTORY_THIN_THREADS" in env, name == "rx7600-belobug-6core", name)
+            self.assertNotIn("VICTORY_PIPELINE_WORKERS", env, name)
+            self.assertNotIn("VICTORY_VIEW_THREADS", env, name)
 
     def test_unknown_preset_is_an_error(self) -> None:
         cfg, scan, assessment = self._setup()
