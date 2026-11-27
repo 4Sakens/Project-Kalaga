@@ -298,6 +298,68 @@ def cmd_launch(args) -> int:
     return EXIT_OK if code == 0 else EXIT_RUNTIME_FAILED
 
 
+def cmd_prepare(args) -> int:
+    """Translate every shader and build every recorded pipeline ahead of a run.
+
+    Both are once-per-build costs the runtime otherwise pays mid-game as
+    multi-second stalls (upstream: 270-660 s of a session). Neither changes
+    the picture.
+    """
+
+    cfg = _cfg(args)
+    directory = _ensure_game_dir(cfg)
+    scan = gamefs.scan(
+        directory,
+        expected_title_id=cfg.game.expected_title_id,
+        expected_version=cfg.game.expected_version,
+    )
+    env = doctor.detect(
+        victory_dir=cfg.runtime.victory_dir,
+        xcl_dir=cfg.runtime.xcl_dir,
+        dxc_dir=cfg.runtime.dxc_dir,
+        toolchain_bin=cfg.runtime.toolchain_bin,
+    )
+    assessment = plan.assess("victory", env, scan, cfg)
+    if assessment.executable is None:
+        print("victory is not built; run `kalaga build` first", file=sys.stderr)
+        return EXIT_NOT_READY
+    launch.stage_dependencies(assessment, cfg)
+    run_env = dict(os.environ)
+    cwd = str(assessment.executable.parent)
+    runtime_toml = Path(cfg.runtime.victory_dir) / "victory.toml"
+    if runtime_toml.is_file():
+        run_env.setdefault("VICTORY_CONFIG", str(runtime_toml))
+        cwd = cfg.runtime.victory_dir
+    if cfg.runtime.dxc_dir:
+        run_env["VICTORY_DXC_DIR"] = cfg.runtime.dxc_dir
+    if scan.directory:
+        run_env.setdefault("VICTORY_GAME_DIR", str(scan.directory))
+    exe = str(assessment.executable)
+    steps = []
+    if not args.skip_shaders:
+        steps.append(("shaders", [exe, "shaders"]))
+    if not args.skip_warm:
+        steps.append(("warm", [exe, "warm"]))
+    cfg.logs_dir.mkdir(parents=True, exist_ok=True)
+    for name, argv in steps:
+        print(f"$ {' '.join(argv)}  (cwd {cwd})")
+        if args.dry_run:
+            continue
+        rc, out, err = util.run(argv, cwd=cwd, timeout=7200, env=run_env)
+        (cfg.logs_dir / f"prepare-{name}.log").write_text(out + err, encoding="utf-8", errors="replace")
+        print("\n".join((out + err).splitlines()[-10:]))
+        if rc != 0:
+            print(f"{name} failed with exit code {rc}; log at {cfg.logs_dir / f'prepare-{name}.log'}",
+                  file=sys.stderr)
+            return EXIT_RUNTIME_FAILED
+    if args.dry_run:
+        print("dry run: nothing started")
+    else:
+        print("prepare OK. `warm` only knows pipelines from runs with VICTORY_PIPELINE_BOOK=1\n"
+              "(the rx7600-belobug presets set it): rerun prepare after the first play session.")
+    return EXIT_OK
+
+
 def cmd_presets(args) -> int:
     if args.json:
         payload = [
@@ -394,6 +456,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true", help="print the command without starting it")
     p.add_argument("--preset", choices=sorted(presets.PRESETS), help="named console + switch set")
     p.set_defaults(func=cmd_launch)
+
+    p = sub.add_parser("prepare", parents=[common],
+                       help="translate shaders and build recorded pipelines ahead of a run")
+    p.add_argument("--skip-shaders", action="store_true")
+    p.add_argument("--skip-warm", action="store_true")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_prepare)
 
     p = sub.add_parser("presets", parents=[common], help="list the launch presets")
     p.set_defaults(func=cmd_presets)

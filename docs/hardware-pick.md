@@ -36,9 +36,16 @@ trying.
 | Preset | Runtime checkout | What it sets |
 |---|---|---|
 | `rx7600-belobug` | Belobug | Series S; the switches Belobug's `scripts\play.ps1` uses; `VICTORY_TEXTURE_ROOM_PERCENT=85` (default 90 was tuned on a 24 GB card) |
+| `rx7600-belobug-quality` | Belobug | Series X profile drawn at native 1080p (`VICTORY_OUTPUT=1920x1080`): full-quality assets, most VRAM |
+| `rx7600-belobug-6core` | Belobug | `rx7600-belobug` + worker pools sized for 12 threads (experiment) |
 | `rx7600-belobug-fast` | Belobug | the above + `VICTORY_PORT_CONSTANTS/DESCRIPTORS/CBV/GUARD/JOURNAL=1` (upstream measures −8 to −10 ms a frame for the three it times; off by default there while tested) |
 | `rx7600-belobug-safe` | Belobug | Series S + `play.ps1 -Safe` settings. First thing to try after a crash |
 | `rx7600-fork` | current `D:\VIctory` (`fxceless/victory-fork`) | Series S + the docs/pc-test.md run-3 switches + `docs/amd-skips.txt` |
+
+All Belobug presets also set `VICTORY_WINDOW_BUDGET_MB=1536` (release idle
+copies under memory pressure) and `VICTORY_PIPELINE_BOOK=1` (record pipelines
+for `kalaga prepare`). What to test and in which order:
+[optimization-plan.md](optimization-plan.md).
 
 ## Setting it up
 
@@ -57,8 +64,9 @@ victory_dir = 'D:\VIctory-Belobug'   # keep D:\VIctory for the old fork
 preset = 'rx7600-belobug'
 ```
 
-Then `python -m kalaga build` and `python -m kalaga launch --dry-run` to
-check the command. Our `patches/` are written against `fxceless/victory-fork`
+Then `python -m kalaga build`, `python -m kalaga prepare` (translate shaders
+and build pipelines ahead, so the first run does not stutter) and
+`python -m kalaga launch --dry-run` to check the command. Our `patches/` are written against `fxceless/victory-fork`
 and are **not** applied to Belobug; it has its own mouse/keyboard mapping
 (`VICTORY_KBM_GTA=1`, add it in `[launch.extra_env]`). Ray tracing
 (`VICTORY_BVH_BUILDER=1`) is left off: it costs about a third of the frame

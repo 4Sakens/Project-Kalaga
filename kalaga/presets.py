@@ -73,6 +73,36 @@ _EIGHT_GB = {
     "VICTORY_TEXTURE_ROOM_PERCENT": "85",
 }
 
+# 32 GiB of RAM: under memory pressure (Windows' numbers, Belobug's
+# RamBand Watch/High), let idle copies of title windows go down to this many
+# bytes. Upstream saw them grow 2.8 -> 4.3 GB in eight minutes. A dropped copy
+# is made again on its next read: no picture change.
+_THIRTY_TWO_GB = {
+    "VICTORY_WINDOW_BUDGET_MB": "1536",
+}
+# Write down every pipeline the title makes, so `kalaga prepare` (victory
+# warm) can build them all before the next run: no first-time stutter.
+_PIPELINE_BOOK = {
+    "VICTORY_PIPELINE_BOOK": "1",
+}
+# Pools sized for 6 cores / 12 threads. Upstream's fixed counts (8 list
+# threads, 6 compare, 6+4 descriptor, 8 pipeline workers) were set on a
+# 24-thread i9; on the 5600X they compete with the submit thread, which is
+# the wall. Untested here: an experiment, not a default.
+_SIX_CORES = {
+    "VICTORY_THIN_THREADS": "4",
+    "VICTORY_UNDER_THREADS": "3",
+    "VICTORY_VIEW_THREADS": "3",
+    "VICTORY_PIPELINE_WORKERS": "4",
+}
+# Series X profile drawn by the title at 1080p: its full-quality settings
+# without the 4K target (upstream: about 16 ms less card time than 4K).
+_SERIES_X_1080P = {
+    "VICTORY_OUTPUT": "1920x1080",
+}
+
+_BELOBUG_COMMON = {**_BELOBUG_BASE, **_EIGHT_GB, **_THIRTY_TWO_GB, **_PIPELINE_BOOK}
+
 # The fxceless/victory-fork switches measured in docs/pc-test.md (run 3).
 _FORK_PC_TEST = {
     "VICTORY_SHADER_LOOP_LIMIT": "256",
@@ -95,21 +125,35 @@ PRESETS: dict[str, Preset] = {
             summary="Belobug runtime, Series S, play.ps1 settings, 8 GB texture room (recommended start)",
             checkout="belobug",
             console="series-s",
-            env={**_BELOBUG_BASE, **_BELOBUG_FAST_WAYS, **_EIGHT_GB},
+            env={**_BELOBUG_COMMON, **_BELOBUG_FAST_WAYS},
+        ),
+        Preset(
+            name="rx7600-belobug-quality",
+            summary="Series X profile at 1080p: full-quality assets; needs the most VRAM",
+            checkout="belobug",
+            console="series-x",
+            env={**_BELOBUG_COMMON, **_BELOBUG_FAST_WAYS, **_SERIES_X_1080P},
+        ),
+        Preset(
+            name="rx7600-belobug-6core",
+            summary="rx7600-belobug with worker pools sized for 6 cores / 12 threads (experiment)",
+            checkout="belobug",
+            console="series-s",
+            env={**_BELOBUG_COMMON, **_BELOBUG_FAST_WAYS, **_SIX_CORES},
         ),
         Preset(
             name="rx7600-belobug-fast",
             summary="rx7600-belobug plus the five renderer patches (VICTORY_PORT_*)",
             checkout="belobug",
             console="series-s",
-            env={**_BELOBUG_BASE, **_BELOBUG_FAST_WAYS, **_EIGHT_GB, **_BELOBUG_PORT},
+            env={**_BELOBUG_COMMON, **_BELOBUG_FAST_WAYS, **_BELOBUG_PORT},
         ),
         Preset(
             name="rx7600-belobug-safe",
             summary="Belobug runtime, Series S, play.ps1 -Safe: try first when something breaks",
             checkout="belobug",
             console="series-s",
-            env={**_BELOBUG_BASE, **_BELOBUG_SAFE_WAYS, **_EIGHT_GB},
+            env={**_BELOBUG_COMMON, **_BELOBUG_SAFE_WAYS},
         ),
         Preset(
             name="rx7600-fork",

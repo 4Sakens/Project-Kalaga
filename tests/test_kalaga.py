@@ -370,6 +370,21 @@ class LaunchTests(TempCase):
         self.assertEqual(len(skips), 43)
         self.assertNotIn("VICTORY_PORT_CBV", result.env)
 
+    def test_quality_preset_is_series_x_at_1080p(self) -> None:
+        cfg, scan, assessment = self._setup()
+        cfg.launch.preset = "rx7600-belobug-quality"
+        result = launch.compose(assessment, scan, cfg)
+        self.assertEqual(result.argv[result.argv.index("--console") + 1], "series-x")
+        self.assertEqual(result.env["VICTORY_OUTPUT"], "1920x1080")
+        self.assertEqual(result.env["VICTORY_PIPELINE_BOOK"], "1")
+        self.assertEqual(result.env["VICTORY_WINDOW_BUDGET_MB"], "1536")
+
+    def test_only_the_six_core_preset_sizes_pools(self) -> None:
+        from kalaga import presets
+        for name, preset in presets.PRESETS.items():
+            env = presets.environment(preset)
+            self.assertEqual("VICTORY_THIN_THREADS" in env, name == "rx7600-belobug-6core", name)
+
     def test_unknown_preset_is_an_error(self) -> None:
         cfg, scan, assessment = self._setup()
         cfg.launch.preset = "rx9999"
