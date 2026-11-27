@@ -816,6 +816,16 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(started, [1])
         self.assertEqual(shooter.world_seconds, 3)
 
+    def test_input_kinds_tell_whether_the_game_has_keyboard_prompts(self) -> None:
+        from kalaga import session
+        log = ("x INFO victory_hle::modules::gameinput: the title asks for gamepad input kind=0x40000 how=\"current reading\"\n"
+               "x INFO victory_hle::modules::gameinput: the title asks for keyboard input kind=0x10 how=\"device callback\"\n"
+               "x INFO victory_hle::modules::gameinput: the title asks for gamepad input kind=0x40000\n")
+        self.assertEqual(session.input_kinds(log), ["gamepad", "keyboard"])
+        self.assertIn("keyboard button prompts of its own", session.keyboard_prompts_note(["gamepad", "keyboard"]))
+        self.assertIn("button icons swapped", session.keyboard_prompts_note(["gamepad", "UI navigation"]))
+        self.assertIn("not in this log", session.keyboard_prompts_note([]))
+
     def test_parses_and_keeps_only_seconds_in_the_world(self) -> None:
         from kalaga import session
         text = "boot noise\n" + self.line(60.0, 2.0, 1.0, 40) + "".join(

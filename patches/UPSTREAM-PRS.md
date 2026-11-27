@@ -221,3 +221,9 @@ From the first `kalaga candidates` run (rdna 0061-0062):
 
 Marvisak #2254 (v_mad_i64_i32 literal sign) applied as text, but VIctory-RDNA
 does not translate v_mad_i64_i32 at all, so its test failed in CI: dropped.
+
+rdna 0063 (Kalaga's own): GameInput says once which input kinds the title
+asks for. Whether GTA VI's Xbox build ever asks for keyboard or mouse
+readings decides how keyboard button prompts can be had: fed a real keyboard
+and mouse if it does, or its pad button icons swapped if it does not. The
+session summary and `kalaga bug` read the answer from the log.

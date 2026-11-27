@@ -423,6 +423,14 @@ def cmd_session(args) -> int:
              "(sampled every 20 s, Windows only).", ""]
     for r in results:
         lines.append(f"- `{r.preset}`: {presets.get(r.preset).summary} — log `{r.log}`")
+    for r in results:
+        try:
+            kinds = session.input_kinds(Path(r.log).read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+        if kinds:
+            lines += ["", "## Keyboard prompts", "", session.keyboard_prompts_note(kinds)]
+            break
     taken = [(r, shots.get(n)) for n, r in enumerate(results) if shots.get(n)]
     if taken:
         lines += ["", "## Side by side", "",
@@ -551,6 +559,7 @@ def cmd_bug(args) -> int:
             notes.append(f"- last {len(last)} s: {min(fps):.1f}-{max(fps):.1f} fps, "
                          f"{last[-1].draws} draws/frame, {last[-1].dropped} dropped without a pipeline "
                          f"({last[-1].making} being made)")
+        notes.append("- " + session.keyboard_prompts_note(session.input_kinds(text)))
         errors = [ln for ln in text.splitlines() if " ERROR " in ln or " WARN " in ln][-40:]
         if errors:
             notes += ["", "Last warnings and errors:", "", "```", *errors, "```"]

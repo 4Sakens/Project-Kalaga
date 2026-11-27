@@ -53,6 +53,34 @@ def parse(text: str) -> list[Second]:
     return out
 
 
+ASKED_LINE = re.compile(r"the title asks for (?P<name>[\w ]+?) input")
+
+
+def input_kinds(text: str) -> list[str]:
+    """The input kinds the title asked for in a run (the runtime's GameInput log)."""
+
+    seen: list[str] = []
+    for m in ASKED_LINE.finditer(text):
+        if m["name"] not in seen:
+            seen.append(m["name"])
+    return seen
+
+
+def keyboard_prompts_note(kinds: list[str]) -> str:
+    """What the kinds asked for say about keyboard button prompts."""
+
+    if not kinds:
+        return ("Input kinds: not in this log (a runtime built before Kalaga's GameInput "
+                "patch, or the run ended before the menus).")
+    kb = [k for k in kinds if k in ("keyboard", "mouse")]
+    if kb:
+        return (f"Input kinds the game asked for: {', '.join(kinds)}. It asks for {' and '.join(kb)} "
+                "itself, so it likely has keyboard play and keyboard button prompts of its own: "
+                "worth feeding it a real keyboard and mouse.")
+    return (f"Input kinds the game asked for: {', '.join(kinds)}. No keyboard or mouse: it only ever "
+            "shows pad prompts, so keyboard prompts need its button icons swapped.")
+
+
 def _pct(values: list[float], p: float) -> float:
     if not values:
         return 0.0

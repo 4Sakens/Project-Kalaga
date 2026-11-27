@@ -1,0 +1,103 @@
+From f3606b0b20ebc723663a377a3f389dc175291620 Mon Sep 17 00:00:00 2001
+From: kalaga <kalaga@localhost>
+Date: Fri, 27 Nov 2026 13:26:38 -0500
+Subject: [PATCH] GameInput: say once which input kinds the title asks for
+
+Whether the title ever asks for keyboard or mouse readings says whether
+it has keyboard and mouse play of its own (and likely keyboard button
+prompts) or only ever shows pad prompts, whatever drives the pad. One
+info line per kind, the first time it is asked for in a reading request,
+a reading callback or a device callback.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01G6tkVHCftUUQbGm5NirGaG
+---
+ crates/victory-hle/src/modules/gameinput.rs | 40 ++++++++++++++++++++-
+ 1 file changed, 39 insertions(+), 1 deletion(-)
+
+diff --git a/crates/victory-hle/src/modules/gameinput.rs b/crates/victory-hle/src/modules/gameinput.rs
+index 5c17c042..26226cc4 100644
+--- a/crates/victory-hle/src/modules/gameinput.rs
++++ b/crates/victory-hle/src/modules/gameinput.rs
+@@ -808,12 +808,47 @@ extern "system" fn timestamp(_: This) -> u64 {
+     now()
+ }
+ 
++/// GameInput's kinds by bit, for [`asked`].
++const KIND_NAMES: [(u32, &str); 8] = [
++    (0x2, "controller axes"),
++    (0x4, "controller buttons"),
++    (0x10, "keyboard"),
++    (0x20, "mouse"),
++    (0x100, "touch"),
++    (0x1000, "motion"),
++    (0x4_0000, "gamepad"),
++    (0x100_0000, "UI navigation"),
++];
++
++/// Says once, for each input kind, that the title asks for it (in a
++/// reading request or a device callback). A title that asks for keyboard
++/// or mouse readings has keyboard and mouse play of its own, and likely its
++/// own keyboard button prompts; one that never does shows pad prompts
++/// whatever drives the pad. Kalaga's bug report and session read this line.
++fn asked(kind: u32, how: &str) {
++    static SEEN: AtomicU32 = AtomicU32::new(0);
++    let new = kind & !SEEN.fetch_or(kind, Ordering::Relaxed);
++    if new == 0 {
++        return;
++    }
++    for &(bit, name) in &KIND_NAMES {
++        if new & bit != 0 {
++            tracing::info!(kind = format_args!("{bit:#x}"), how, "the title asks for {name} input");
++        }
++    }
++    let unnamed = new & !KIND_NAMES.iter().fold(0, |a, &(bit, _)| a | bit);
++    if unnamed != 0 {
++        tracing::info!(kind = format_args!("{unnamed:#x}"), how, "the title asks for other input kinds");
++    }
++}
++
+ extern "system" fn current_reading(
+     this: This,
+     kind: u32,
+     device: *const Device,
+     out: Out,
+ ) -> HRESULT {
++    asked(kind, "current reading");
+     let hub = hub(this);
+     let state = hub.state();
+     let newest = |i: usize| {
+@@ -852,6 +887,7 @@ fn relative(
+     out: Out,
+     forward: bool,
+ ) -> HRESULT {
++    asked(kind, if forward { "next reading" } else { "previous reading" });
+     if reference.is_null() {
+         return fail(out, E_INVALIDARG);
+     }
+@@ -939,12 +975,13 @@ fn token(out: *mut u64) -> HRESULT {
+ extern "system" fn register_reading(
+     _: This,
+     _device: *const c_void,
+-    _kind: u32,
++    kind: u32,
+     _threshold: f32,
+     _context: *mut c_void,
+     _callback: *const c_void,
+     out: *mut u64,
+ ) -> HRESULT {
++    asked(kind, "reading callback");
+     tracing::warn!("input reading callbacks are never called");
+     token(out)
+ }
+@@ -963,6 +1000,7 @@ extern "system" fn register_device(
+     callback: Option<DeviceCallback>,
+     out: *mut u64,
+ ) -> HRESULT {
++    asked(kind, "device callback");
+     let Some(callback) = callback else {
+         return E_INVALIDARG;
+     };
+-- 
+2.43.0
+
