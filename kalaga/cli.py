@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import config, doctor, gamefs, launch, plan, util
+from . import config, doctor, gamefs, launch, plan, presets, util
 
 EXIT_OK = 0
 EXIT_INVALID_GAME = 2
@@ -254,6 +254,8 @@ def cmd_launch(args) -> int:
     cfg = _cfg(args)
     if args.warp:
         cfg.launch.warp = True
+    if args.preset:
+        cfg.launch.preset = args.preset
     directory = _ensure_game_dir(cfg)
     scan = gamefs.scan(
         directory,
@@ -294,6 +296,27 @@ def cmd_launch(args) -> int:
     code = launch.execute(launch_plan, timeout=args.timeout or cfg.launch.timeout)
     print(launch.summary(launch_plan, code, cfg))
     return EXIT_OK if code == 0 else EXIT_RUNTIME_FAILED
+
+
+def cmd_presets(args) -> int:
+    if args.json:
+        payload = [
+            {
+                "name": p.name,
+                "summary": p.summary,
+                "checkout": p.checkout,
+                "console": p.console,
+                "env": presets.environment(p),
+            }
+            for p in presets.PRESETS.values()
+        ]
+        print(json.dumps(payload, indent=2))
+        return EXIT_OK
+    for p in presets.PRESETS.values():
+        print(f"{p.name:22} [{p.checkout}, {p.console}] {p.summary}")
+    print("\nUse one with `kalaga launch --preset NAME` or [launch] preset = 'NAME'.")
+    print("See docs/hardware-pick.md for why.")
+    return EXIT_OK
 
 
 def cmd_report(args) -> int:
@@ -369,7 +392,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--warp", action="store_true", help="software D3D12 adapter (safe diagnostics)")
     p.add_argument("--timeout", type=int, default=0, help="stop the title after N seconds")
     p.add_argument("--dry-run", action="store_true", help="print the command without starting it")
+    p.add_argument("--preset", choices=sorted(presets.PRESETS), help="named console + switch set")
     p.set_defaults(func=cmd_launch)
+
+    p = sub.add_parser("presets", parents=[common], help="list the launch presets")
+    p.set_defaults(func=cmd_presets)
 
     p = sub.add_parser("report", parents=[common], help="write one JSON report of everything")
     p.add_argument("--out", help="output path")

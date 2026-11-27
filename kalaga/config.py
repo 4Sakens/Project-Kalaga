@@ -58,7 +58,10 @@ class RuntimeConfig:
 
 @dataclass
 class LaunchConfig:
-    console: str = "series-x"
+    # Empty = the preset's console, else "series-x".
+    console: str = ""
+    # A named preset from kalaga/presets.py; empty = none.
+    preset: str = ""
     warp: bool = False
     log: str = "info"
     extra_env: dict[str, str] = field(default_factory=dict)
@@ -136,7 +139,8 @@ def load(path: str | os.PathLike | None = None) -> Config:
     )
     launch = data.get("launch", {})
     cfg.launch = LaunchConfig(
-        console=_as_str(launch.get("console"), "series-x").lower(),
+        console=_as_str(launch.get("console")).lower(),
+        preset=_as_str(launch.get("preset")),
         warp=bool(launch.get("warp", False)),
         log=_as_str(launch.get("log"), "info"),
         extra_env={str(k): str(v) for k, v in (launch.get("extra_env") or {}).items()},
