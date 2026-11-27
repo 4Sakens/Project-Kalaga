@@ -715,6 +715,52 @@ class UpstreamPatchTests(unittest.TestCase):
             self.assertGreater(len(series.patches), 0, name)
 
 
+class CandidateTests(unittest.TestCase):
+    """kalaga candidates tries each PR on the patched checkout and backs it out."""
+
+    def test_applies_conflicts_and_already_in(self) -> None:
+        import shutil
+        import subprocess
+        from kalaga import candidates
+        if shutil.which("git") is None:
+            self.skipTest("git not installed")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            def git(cwd, *a):
+                return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd,
+                                      check=True, capture_output=True, text=True).stdout.strip()
+            up = root / "up"
+            up.mkdir()
+            git(up, "init", "-q", "-b", "main")
+            (up / "a.txt").write_text("one\ntwo\nthree\n", encoding="utf-8", newline="\n")
+            (up / "b.txt").write_text("b\n", encoding="utf-8", newline="\n")
+            git(up, "add", "."); git(up, "commit", "-qm", "base")
+            base = git(up, "rev-parse", "HEAD")
+            def pr(n, path, text, subject):
+                git(up, "checkout", "-q", "-b", f"pr{n}", base)
+                (up / path).write_text(text, encoding="utf-8", newline="\n")
+                git(up, "commit", "-qam", subject)
+                git(up, "update-ref", f"refs/pull/{n}/head", "HEAD")
+                git(up, "checkout", "-q", "main")
+            pr(1, "b.txt", "b changed\n", "Change b")
+            pr(2, "a.txt", "one\nTWO\nthree\n", "Shout two")
+            pr(3, "a.txt", "one\nzwei\nthree\n", "Already taken (#9)")
+            co = root / "co"
+            git(root, "clone", "-q", str(up), str(co))
+            (co / "a.txt").write_text("one\nzwei\nthree\n", encoding="utf-8", newline="\n")
+            git(co, "commit", "-qam", "Already taken")  # our series' version of PR 3
+            head = git(co, "rev-parse", "HEAD")
+            make = lambda n: candidates.PullRequest("o/r", n, f"pr {n}", "u", "", 1, clone_url=str(up))
+            taken = {candidates.normalise("Already taken")}
+            results = [candidates.try_pr(co, make(n), taken) for n in (1, 2, 3)]
+            self.assertEqual([r.result for r in results], ["applies", "conflicts", "already in"])
+            self.assertEqual(results[0].files, ["b.txt"])
+            self.assertEqual(git(co, "rev-parse", "HEAD"), head)
+            self.assertEqual(git(co, "status", "--porcelain"), "")
+            text = candidates.markdown("rdna", results, 3)
+            self.assertIn("1 apply cleanly", text)
+
+
 class SeriesStampTests(unittest.TestCase):
     """kalaga home patches a checkout again when the series changed."""
 

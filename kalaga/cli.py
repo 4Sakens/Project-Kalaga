@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import config, doctor, gamefs, launch, plan, presets, session, upstream, util
+from . import candidates, config, doctor, gamefs, launch, plan, presets, session, upstream, util
 
 EXIT_OK = 0
 EXIT_INVALID_GAME = 2
@@ -576,6 +576,22 @@ def cmd_bug(args) -> int:
     return EXIT_OK
 
 
+def cmd_candidates(args) -> int:
+    """Try new upstream PRs on top of a patched checkout; report which apply."""
+
+    directory = args.dir or _cfg(args).runtime.victory_dir
+    if not directory:
+        print("give --dir (a checkout with the series applied)", file=sys.stderr)
+        return EXIT_NOT_READY
+    repos = tuple(r.strip() for r in args.repos.split(",") if r.strip()) if args.repos else candidates.REPOS
+    text, _ = candidates.run(args.runtime, Path(directory), days=args.days, repos=repos)
+    print(text)
+    if args.summary:
+        with open(args.summary, "a", encoding="utf-8") as fh:
+            fh.write(text + "\n")
+    return EXIT_OK
+
+
 def _fresh_cache_warm_failure(output: str) -> bool:
     """`victory warm` failing only because <cache>\\pipelines does not exist yet."""
 
@@ -956,6 +972,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--apply", action="store_true",
                    help="write the picked preset into kalaga.toml ([launch] preset)")
     p.set_defaults(func=cmd_session)
+
+    p = sub.add_parser("candidates", parents=[common],
+                       help="try new upstream PRs on a patched checkout and report which apply")
+    p.add_argument("--runtime", choices=upstream.runtimes() or ["rdna", "belobug"], default="rdna")
+    p.add_argument("--dir", help="the patched checkout (default: [runtime] victory_dir)")
+    p.add_argument("--days", type=int, default=3, help="PRs updated in this many days (default 3)")
+    p.add_argument("--repos", help="comma-separated owner/name list (default: the tracked VIctory repos)")
+    p.add_argument("--summary", help="append the markdown to this file (CI job summary)")
+    p.set_defaults(func=cmd_candidates)
 
     p = sub.add_parser("bug", parents=[common],
                        help="zip logs, preset, runtime build and frame stats for a bug report")

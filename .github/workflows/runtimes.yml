@@ -23,6 +23,7 @@ on:
       - "patches/belobug/**"
       - "patches/*/KNOWN-FAILING.txt"
       - "kalaga/upstream.py"
+      - "kalaga/candidates.py"
       - ".github/workflows/runtimes.yml"
   schedule:
     - cron: "17 9 * * *" # daily, ~4 am New York: catches upstream drift
@@ -30,6 +31,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: runtimes-${{ github.ref }}
@@ -49,6 +51,41 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m unittest discover -s tests -v
+
+  # New PRs in the repos we pick from, tried on top of our patched series:
+  # which apply cleanly (worth a build), which conflict, which we have.
+  # Report only; never fails the run. The daily watch reads its summary.
+  candidates:
+    name: candidates (${{ matrix.runtime }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [rdna, belobug]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: kalaga
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Patched runtime
+        run: |
+          meta=kalaga/patches/${{ matrix.runtime }}/UPSTREAM.toml
+          repo=$(sed -n 's/^repo *= *"\(.*\)"/\1/p' $meta)
+          commit=$(sed -n 's/^commit *= *"\(.*\)"/\1/p' $meta)
+          git init -q runtime
+          git -C runtime config core.autocrlf false
+          git -C runtime fetch -q --depth 1 "$repo" "$commit"
+          git -C runtime checkout -q FETCH_HEAD
+          cd kalaga && python -m kalaga patches --runtime ${{ matrix.runtime }} --dir ../runtime --strict > /dev/null
+      - name: Try new upstream PRs
+        working-directory: kalaga
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python -m kalaga candidates --runtime ${{ matrix.runtime }} --dir ../runtime --days 3 --summary "$GITHUB_STEP_SUMMARY"
 
   runtime:
     name: ${{ matrix.runtime }} (${{ matrix.leg }})
