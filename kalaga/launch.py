@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -192,27 +193,44 @@ def execute(plan: LaunchPlan, timeout: int = 0, on_spawn=None, echo: bool = True
         assert proc.stdout is not None
         if on_spawn is not None:
             on_spawn(proc.pid)
-        deadline = time.time() + timeout if timeout else None
+        # The time limit holds even when the title stops printing (a frozen
+        # load or a hung card): a timer ends the process, not the next line.
+        timed_out = threading.Event()
+
+        def _time_up() -> None:
+            timed_out.set()
+            try:
+                proc.terminate()
+            except OSError:  # pragma: no cover - already gone
+                pass
+
+        timer = threading.Timer(timeout, _time_up) if timeout else None
+        if timer is not None:
+            timer.daemon = True
+            timer.start()
         try:
             for line in proc.stdout:
                 if echo:
                     print(line, end="")
                 log.write(line)
                 log.flush()
-                if deadline and time.time() > deadline:
-                    proc.terminate()
-                    notes = f"# timed out after {timeout}s\n"
-                    print(notes, end="")
-                    log.write(notes)
-                    break
         except KeyboardInterrupt:  # pragma: no cover - interactive
             proc.terminate()
+            raise
         finally:
+            if timer is not None:
+                timer.cancel()
             try:
                 code = proc.wait(timeout=30)
             except subprocess.TimeoutExpired:  # pragma: no cover - defensive
                 proc.kill()
                 code = proc.wait()
+            if timed_out.is_set():
+                notes = f"# timed out after {timeout}s\n"
+                if echo:
+                    print(notes, end="")
+                log.write(notes)
+                log.flush()
     return code
 
 

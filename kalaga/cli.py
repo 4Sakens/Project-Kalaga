@@ -293,7 +293,14 @@ def cmd_launch(args) -> int:
     if args.dry_run:
         print("dry run: not starting the title")
         return EXIT_OK
-    code = launch.execute(launch_plan, timeout=args.timeout or cfg.launch.timeout)
+    try:
+        code = launch.execute(launch_plan, timeout=args.timeout or cfg.launch.timeout)
+    except KeyboardInterrupt:
+        print("\nstopped (Ctrl+C); the title was ended")
+        code = 130
+    except OSError as exc:
+        print(f"could not start {launch_plan.argv[0]}: {exc}", file=sys.stderr)
+        return EXIT_RUNTIME_FAILED
     print(launch.summary(launch_plan, code, cfg))
     return EXIT_OK if code == 0 else EXIT_RUNTIME_FAILED
 
@@ -361,9 +368,20 @@ def cmd_session(args) -> int:
                 break
         print(f"[{i}/{len(names)}] {name}: running {run_seconds} s, log {launch_plan.log_path}")
         sampler = session.MemorySampler()
-        code = launch.execute(launch_plan, timeout=run_seconds, on_spawn=sampler.start, echo=False)
+        stop_session = False
+        try:
+            code = launch.execute(launch_plan, timeout=run_seconds, on_spawn=sampler.start, echo=False)
+        except KeyboardInterrupt:
+            print("\n          stopped (Ctrl+C): this run is kept, the rest are skipped")
+            code, stop_session = 130, True
+        except OSError as exc:
+            print(f"          could not start {launch_plan.argv[0]}: {exc}", file=sys.stderr)
+            code = f"did not start ({exc.__class__.__name__})"
         ram, vram = sampler.stop()
-        text = launch_plan.log_path.read_text(encoding="utf-8", errors="replace")
+        try:
+            text = launch_plan.log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
         result = session.Result(name, session.parse(text), ram, vram,
                                 session.exit_label(code, text), str(launch_plan.log_path))
         results.append(result)
@@ -373,6 +391,8 @@ def cmd_session(args) -> int:
                   f"{result.bound()}-bound, {st['hitches']} hitches")
         else:
             print(f"          never reached the world (exit {result.exit_code}); see the log")
+        if stop_session:
+            break
     if not results:
         return EXIT_RUNTIME_FAILED
 
@@ -389,7 +409,8 @@ def cmd_session(args) -> int:
     with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as z:
         z.write(summary, f"session-{stamp}/summary.md")
         for r in results:
-            z.write(r.log, f"session-{stamp}/{Path(r.log).name}")
+            if Path(r.log).is_file():
+                z.write(r.log, f"session-{stamp}/{Path(r.log).name}")
         crashes = launch.crash_log(env, cfg)
         if crashes.is_file():
             z.writestr(f"session-{stamp}/crashes-tail.log", launch.tail(crashes, 200))
@@ -497,7 +518,8 @@ def cmd_prepare(args) -> int:
         print("dry run: nothing started")
     else:
         print("prepare OK. `warm` only knows pipelines from runs with VICTORY_PIPELINE_BOOK=1\n"
-              "(the rx7600-belobug presets set it): rerun prepare after the first play session.")
+              "(every rx7600-rdna and rx7600-belobug preset sets it): rerun prepare after\n"
+              "the first play session.")
     return EXIT_OK
 
 

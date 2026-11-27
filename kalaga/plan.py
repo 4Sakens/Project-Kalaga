@@ -123,6 +123,10 @@ def _buildable_source(
     return True
 
 
+# Blockers that concern building only.
+BUILD_ONLY_BLOCKERS = frozenset({"no-cargo", "no-linker"})
+
+
 def _runtime_dir(runtime: str, cfg: Config) -> Path:
     return Path(cfg.runtime.victory_dir if runtime == "victory" else cfg.runtime.xcl_dir)
 
@@ -246,6 +250,14 @@ def assess(
             "On a real GPU the world can hang the display driver; use `kalaga launch --warp` "
             "for a software-adapter diagnostics run."
         )
+
+    if result.executable is not None:
+        # Missing build tools stop a build, not a run of an .exe already built
+        # (a shell without mingw on PATH must not block `launch` or `session`).
+        for blocker in result.blockers:
+            if blocker.code in BUILD_ONLY_BLOCKERS and blocker.severity == "error":
+                blocker.severity = "warn"
+                blocker.message += " (only needed to build; the built .exe can run)"
 
     result.can_run = result.game_ok and result.executable is not None and not result.errors
     return result

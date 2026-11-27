@@ -105,7 +105,7 @@ class Result:
         return "both"
 
 
-def exit_label(code: int | None, log_text: str) -> int | str | None:
+def exit_label(code: int | str | None, log_text: str) -> int | str | None:
     """'time up' for a run kalaga stopped on schedule; else the exit code (a crash, if not 0)."""
 
     if "# timed out after" in log_text:

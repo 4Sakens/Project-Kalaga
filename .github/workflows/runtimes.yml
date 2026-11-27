@@ -9,6 +9,9 @@
 #              that fails on a hosted runner anyway.
 #   latest   - upstream's newest commit + the series: early warning that
 #              upstream moved under a patch. Allowed to fail.
+#   gnu      - the pinned base + the series, built the way the PC builds it
+#              (README: Rust 1.98.1 GNU + mingw-w64, no Visual Studio). Build
+#              only. Must pass.
 # No GPU here: upstream's GPU tests skip without one, as in upstream's own CI.
 name: Runtimes
 
@@ -51,12 +54,12 @@ jobs:
     name: ${{ matrix.runtime }} (${{ matrix.leg }})
     runs-on: windows-latest
     timeout-minutes: 120
-    continue-on-error: ${{ matrix.leg != 'patched' }}
+    continue-on-error: ${{ matrix.leg == 'bare' || matrix.leg == 'latest' }}
     strategy:
       fail-fast: false
       matrix:
         runtime: [rdna, belobug]
-        leg: [patched, bare, latest]
+        leg: [patched, bare, latest, gnu]
     steps:
       - uses: actions/checkout@v5
         with:
@@ -90,14 +93,33 @@ jobs:
         working-directory: kalaga
         run: |
           $extra = @()
-          if ('${{ matrix.leg }}' -eq 'patched') { $extra += '--strict' }
+          if ('${{ matrix.leg }}' -in @('patched', 'gnu')) { $extra += '--strict' }
           python -m kalaga patches --runtime ${{ matrix.runtime }} --dir ../runtime --summary $env:GITHUB_STEP_SUMMARY @extra
           exit $LASTEXITCODE
 
       # The version and components pinned in the runtime's rust-toolchain.toml.
       - name: Rust toolchain
+        if: matrix.leg != 'gnu'
         working-directory: runtime
         run: rustup toolchain install
+
+      - name: mingw-w64 (gnu leg)
+        id: msys2
+        if: matrix.leg == 'gnu'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc
+          path-type: inherit
+
+      - name: Rust 1.98.1 GNU (gnu leg)
+        if: matrix.leg == 'gnu'
+        shell: pwsh
+        run: |
+          rustup toolchain install 1.98.1-x86_64-pc-windows-gnu --profile minimal
+          # The runtime's own msys2 gcc first on PATH, as toolchain_bin does in kalaga.toml.
+          "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -105,10 +127,23 @@ jobs:
           key: ${{ matrix.runtime }}-${{ matrix.leg }}
 
       - name: Build victory.exe (release, as Kalaga builds it)
+        if: matrix.leg != 'gnu'
         working-directory: runtime
         run: cargo build --locked --release -p victory
 
+      - name: Build victory.exe (GNU, as the PC builds it)
+        if: matrix.leg == 'gnu'
+        working-directory: runtime
+        shell: pwsh
+        run: |
+          gcc --version | Select-Object -First 1
+          cargo +1.98.1-x86_64-pc-windows-gnu build --locked --release -p victory --target x86_64-pc-windows-gnu
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $exe = Get-Item target/x86_64-pc-windows-gnu/release/victory.exe
+          "GNU build: victory.exe $([math]::Round($exe.Length / 1MB)) MB" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+
       - name: Tests (default features)
+        if: matrix.leg != 'gnu'
         working-directory: runtime
         shell: pwsh
         run: |
@@ -125,6 +160,6 @@ jobs:
           exit $LASTEXITCODE
 
       - name: Clippy (warnings shown, not fatal)
-        if: always()
+        if: always() && matrix.leg != 'gnu'
         working-directory: runtime
         run: cargo clippy --workspace --all-targets --locked

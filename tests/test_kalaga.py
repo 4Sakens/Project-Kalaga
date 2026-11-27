@@ -252,6 +252,16 @@ class PlanTests(TempCase):
         result = plan.assess("victory", make_environment(link=False), gamefs.scan(game), cfg)
         self.assertFalse(result.can_build)
         self.assertIn("no-linker", {b.code for b in result.blockers})
+        # The .exe is already built: a missing linker stops building, not running.
+        self.assertTrue(result.can_run)
+
+    def test_missing_linker_and_no_exe_cannot_run(self) -> None:
+        runtime = self._runtime("victory")
+        (runtime / "target" / "release" / "victory.exe").unlink()
+        game = make_game(self.root)
+        cfg = self._cfg(runtime)
+        result = plan.assess("victory", make_environment(link=False), gamefs.scan(game), cfg)
+        self.assertFalse(result.can_build)
         self.assertFalse(result.can_run)
 
     def test_missing_dxcompiler_blocks_run(self) -> None:
@@ -319,6 +329,13 @@ class LaunchTests(TempCase):
         assessment = plan.assess("victory", make_environment(), scan, cfg)
         self.assertTrue(assessment.can_run, assessment.blockers)
         return cfg, scan, assessment
+
+    def test_a_built_exe_runs_without_build_tools(self) -> None:
+        cfg, scan, _ = self._setup()
+        env = make_environment(cargo=False, link=False)
+        assessment = plan.assess("victory", env, scan, cfg)
+        self.assertTrue(assessment.can_run, [b.message for b in assessment.errors])
+        self.assertFalse(assessment.can_build)
 
     def test_command_shape(self) -> None:
         cfg, scan, assessment = self._setup()
