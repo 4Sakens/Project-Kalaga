@@ -727,11 +727,13 @@ class CandidateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             def git(cwd, *a):
-                return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd,
+                return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                                       "-c", "core.autocrlf=false", *a], cwd=cwd,
                                       check=True, capture_output=True, text=True).stdout.strip()
             up = root / "up"
             up.mkdir()
             git(up, "init", "-q", "-b", "main")
+            git(up, "config", "core.autocrlf", "false")
             (up / "a.txt").write_text("one\ntwo\nthree\n", encoding="utf-8", newline="\n")
             (up / "b.txt").write_text("b\n", encoding="utf-8", newline="\n")
             git(up, "add", "."); git(up, "commit", "-qm", "base")
@@ -746,7 +748,7 @@ class CandidateTests(unittest.TestCase):
             pr(2, "a.txt", "one\nTWO\nthree\n", "Shout two")
             pr(3, "a.txt", "one\nzwei\nthree\n", "Already taken (#9)")
             co = root / "co"
-            git(root, "clone", "-q", str(up), str(co))
+            git(root, "clone", "-q", "-c", "core.autocrlf=false", str(up), str(co))
             (co / "a.txt").write_text("one\nzwei\nthree\n", encoding="utf-8", newline="\n")
             git(co, "commit", "-qam", "Already taken")  # our series' version of PR 3
             head = git(co, "rev-parse", "HEAD")

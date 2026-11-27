@@ -72,16 +72,25 @@ jobs:
         with:
           python-version: "3.12"
       - name: Patched runtime
+        id: fetch
+        env:
+          GIT_TERMINAL_PROMPT: "0"
         run: |
           meta=kalaga/patches/${{ matrix.runtime }}/UPSTREAM.toml
           repo=$(sed -n 's/^repo *= *"\(.*\)"/\1/p' $meta)
           commit=$(sed -n 's/^commit *= *"\(.*\)"/\1/p' $meta)
           git init -q runtime
           git -C runtime config core.autocrlf false
-          git -C runtime fetch -q --depth 1 "$repo" "$commit"
+          if ! git -C runtime fetch -q --depth 1 "$repo" "$commit"; then
+            echo "**$repo cannot be fetched any more** (private, deleted or down): no candidates for ${{ matrix.runtime }}." >> "$GITHUB_STEP_SUMMARY"
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "available=true" >> "$GITHUB_OUTPUT"
           git -C runtime checkout -q FETCH_HEAD
           cd kalaga && python -m kalaga patches --runtime ${{ matrix.runtime }} --dir ../runtime --strict > /dev/null
       - name: Try new upstream PRs
+        if: steps.fetch.outputs.available == 'true'
         working-directory: kalaga
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -106,7 +115,10 @@ jobs:
           python-version: "3.12"
 
       - name: Fetch the runtime
+        id: fetch
         shell: pwsh
+        env:
+          GIT_TERMINAL_PROMPT: "0"
         run: |
           $meta = Get-Content "kalaga/patches/${{ matrix.runtime }}/UPSTREAM.toml" -Raw
           $repo = [regex]::Match($meta, 'repo\s*=\s*"([^"]+)"').Groups[1].Value
@@ -119,13 +131,25 @@ jobs:
           git -C runtime config core.autocrlf false
           git -C runtime remote add origin $repo
           git -C runtime fetch -q --depth 1 origin $ref
-          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if ($LASTEXITCODE -ne 0) {
+            # A repo taken private or deleted asks for a login: not our patches'
+            # fault. Say so and skip the leg instead of failing every day.
+            git ls-remote $repo HEAD 2>&1 | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+              "**$repo cannot be fetched any more** (private, deleted or down): ${{ matrix.runtime }} legs skipped." | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+              "::warning::$repo cannot be fetched (private, deleted or down); ${{ matrix.runtime }} skipped"
+              "available=false" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+              exit 0
+            }
+            exit 1
+          }
+          "available=true" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
           git -C runtime checkout -q FETCH_HEAD
           $head = git -C runtime rev-parse HEAD
           "Base: $repo @ $head ($('${{ matrix.leg }}'))" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
       - name: Apply the picked PRs
-        if: matrix.leg != 'bare'
+        if: steps.fetch.outputs.available == 'true' && (matrix.leg != 'bare')
         shell: pwsh
         working-directory: kalaga
         run: |
@@ -136,13 +160,13 @@ jobs:
 
       # The version and components pinned in the runtime's rust-toolchain.toml.
       - name: Rust toolchain
-        if: matrix.leg != 'gnu'
+        if: steps.fetch.outputs.available == 'true' && (matrix.leg != 'gnu')
         working-directory: runtime
         run: rustup toolchain install
 
       - name: mingw-w64 (gnu leg)
         id: msys2
-        if: matrix.leg == 'gnu'
+        if: steps.fetch.outputs.available == 'true' && (matrix.leg == 'gnu')
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
@@ -151,7 +175,7 @@ jobs:
           path-type: inherit
 
       - name: Rust 1.98.1 GNU (gnu leg)
-        if: matrix.leg == 'gnu'
+        if: steps.fetch.outputs.available == 'true' && (matrix.leg == 'gnu')
         shell: pwsh
         run: |
           rustup toolchain install 1.98.1-x86_64-pc-windows-gnu --profile minimal
@@ -159,17 +183,18 @@ jobs:
           "${{ steps.msys2.outputs.msys2-location }}\mingw64\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
 
       - uses: Swatinem/rust-cache@v2
+        if: steps.fetch.outputs.available == 'true'
         with:
           workspaces: runtime
           key: ${{ matrix.runtime }}-${{ matrix.leg }}
 
       - name: Build victory.exe (release, as Kalaga builds it)
-        if: matrix.leg != 'gnu'
+        if: steps.fetch.outputs.available == 'true' && (matrix.leg != 'gnu')
         working-directory: runtime
         run: cargo build --locked --release -p victory
 
       - name: Build victory.exe (GNU, as the PC builds it)
-        if: matrix.leg == 'gnu'
+        if: steps.fetch.outputs.available == 'true' && (matrix.leg == 'gnu')
         working-directory: runtime
         shell: pwsh
         run: |
@@ -180,7 +205,7 @@ jobs:
           "GNU build: victory.exe $([math]::Round($exe.Length / 1MB)) MB" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
 
       - name: Tests (default features)
-        if: matrix.leg != 'gnu'
+        if: steps.fetch.outputs.available == 'true' && (matrix.leg != 'gnu')
         working-directory: runtime
         shell: pwsh
         run: |
@@ -197,6 +222,6 @@ jobs:
           exit $LASTEXITCODE
 
       - name: Clippy (warnings shown, not fatal)
-        if: always() && matrix.leg != 'gnu'
+        if: always() && steps.fetch.outputs.available == 'true' && matrix.leg != 'gnu'
         working-directory: runtime
         run: cargo clippy --workspace --all-targets --locked
