@@ -29,7 +29,7 @@ public yet; if it lands it attacks the cost every runtime here pays.
 
 | | |
 |---|---|
-| Repo | `https://github.com/Belobug/VIctory-Belobug-AMD` (`main` @ `4eb6cfd`), GPL-3.0 |
+| Repo | `https://github.com/Belobug/VIctory-Belobug-AMD` (default branch `a-publier` @ `4eb6cfd`), GPL-3.0 |
 | Why | The fastest public AMD code. Same tree as AvatarManz's `VIctory-7900XTX` (35 files differ), and `fxceless/victory-fork` now pulls fixes from it. All 25,790 used shaders translate, so the 43-entry AMD skip list is not needed. |
 | Measured (7900 XTX, i9-12900K, 64 GB) | City street, Series S, renderer patches on: ~45 ms (22 fps). Series X: ~53 ms (19 fps). Kalaga's current fork base: ~4 fps on this PC. |
 | Bottleneck upstream | One submit thread (~40 ms/frame) — CPU-side. The `VICTORY_PORT_*` patches attack exactly that. |
@@ -95,8 +95,9 @@ preset = 'rx7600-rdna'   # a preset matching the checkout: rx7600-belobug for Be
 Then `python -m kalaga build`, `python -m kalaga prepare` (same switches as
 the preset you will play; translate shaders
 and build pipelines ahead, so the first run does not stutter) and
-`python -m kalaga launch --dry-run` to check the command. Our `patches/` are written against `fxceless/victory-fork`
-and are **not** applied to Belobug; it has its own mouse/keyboard mapping
+`python -m kalaga launch --dry-run` to check the command. Our numbered `patches/*.patch` are written against `fxceless/victory-fork`
+and are **not** applied to Belobug; picked upstream PRs for VIctory-RDNA and
+Belobug are in `patches/rdna/` and `patches/belobug/` ([patches/UPSTREAM-PRS.md](../patches/UPSTREAM-PRS.md)); it has its own mouse/keyboard mapping
 (`VICTORY_KBM_GTA=1`, add it in `[launch.extra_env]`). Ray tracing
 (`VICTORY_BVH_BUILDER=1`) is left off: it costs about a third of the frame
 upstream and needs more memory than this card has.

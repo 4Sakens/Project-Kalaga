@@ -1,0 +1,208 @@
+From 3f91df560ad12dcc1a09664692ed0cea3f1a7eee Mon Sep 17 00:00:00 2001
+From: CauaHenriqueM <92392798+CauaHenriqueM@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 20:23:36 -0300
+Subject: [PATCH] Reclaim idle upload memory under host pressure
+
+---
+ crates/victory-gpu/src/host.rs      |  9 +++---
+ crates/victory-gpu/src/pool.rs      | 46 +++++++++++++----------------
+ crates/victory-gpu/src/residency.rs | 46 ++++++++++++++++-------------
+ 3 files changed, 50 insertions(+), 51 deletions(-)
+
+diff --git a/crates/victory-gpu/src/host.rs b/crates/victory-gpu/src/host.rs
+index fd4d49a..e9e45d6 100644
+--- a/crates/victory-gpu/src/host.rs
++++ b/crates/victory-gpu/src/host.rs
+@@ -555,11 +555,11 @@ fn sweep() {
+     }
+     #[cfg(feature = "diagnostics")]
+     crate::book::check();
+-    crate::residency::refresh();
+-    if crate::residency::pressured() {
++    let host_pressure = crate::residency::refresh();
++    if host_pressure {
+         trim_spare_chunks();
+     }
+-    crate::pool::room(host().and_then(|h| h.video_memory()));
++    crate::pool::room(host().and_then(|h| h.video_memory()), host_pressure);
+     crate::pipeline::trim_library();
+     crate::shadow::let_go_idle();
+     crate::texture::let_go_idle();
+@@ -2130,8 +2130,7 @@ fn give_chunks(chunks: Vec<(Chunk, u64)>) {
+     drop(freed);
+ }
+ 
+-/// Lets go of the scratch chunks kept idle, when the system is short of
+-/// memory (`VICTORY_RESIDENCY=1`, [`crate::residency::pressured`]).
++/// Releases cached scratch chunks when the system is short of memory.
+ fn trim_spare_chunks() {
+     let freed: Vec<(Chunk, u64)> = {
+         let mut spare = SPARE.lock().unwrap_or_else(|e| e.into_inner());
+diff --git a/crates/victory-gpu/src/pool.rs b/crates/victory-gpu/src/pool.rs
+index 817d66f..bd0152f 100644
+--- a/crates/victory-gpu/src/pool.rs
++++ b/crates/victory-gpu/src/pool.rs
+@@ -38,36 +38,32 @@ const STAGING_KEPT: usize = 8;
+ /// How many are kept now.
+ static SPARES: AtomicUsize = AtomicUsize::new(SPARE);
+ 
+-/// Sets how many empty blocks stay, by the card's memory (budget and use):
+-/// [`SPARE_KEPT`] below 85 % ([`crate::host::keep_freed`]), else [`SPARE`].
+-/// Asked once a second.
+-pub(crate) fn room(memory: Option<[u64; 4]>) {
+-    if !crate::residency::on() {
+-        SPARES.store(spares(memory, crate::host::keep_freed()), Ordering::Relaxed);
+-        return;
+-    }
+-    // (`VICTORY_RESIDENCY=1`, codec-d/cool_fox c64fc9b4/e94d277a: fewer
+-    // spares while the system is short of memory, and idle blocks let go now,
+-    // not at the pool's next allocation.)
+-    let pressure = crate::residency::pressured();
+-    let limit = spares(memory, crate::host::keep_freed() && !pressure);
++/// Sets the empty texture block limit and sweeps idle upload memory once a second.
++pub(crate) fn room(memory: Option<[u64; 4]>, host_pressure: bool) {
++    let residency = crate::residency::on();
++    let keep_textures = crate::host::keep_freed() && !(residency && host_pressure);
++    let limit = spares(memory, keep_textures);
+     SPARES.store(limit, Ordering::Relaxed);
+     let tick = now();
+-    if let Ok(mut pool) = TEXTURES.try_lock() {
++    if residency && let Ok(mut pool) = TEXTURES.try_lock() {
+         pool.reclaim(tick, limit, true);
+     }
+     if let Ok(mut pool) = STAGING.try_lock() {
+-        let staging_limit = if crate::residency::critical_commit() {
+-            0
+-        } else if pressure {
+-            1
+-        } else {
+-            limit
+-        };
++        let staging_limit = staging_spares(limit, host_pressure, crate::residency::critical_commit());
+         pool.reclaim(tick, staging_limit, true);
+     }
+ }
+ 
++fn staging_spares(limit: usize, host_pressure: bool, critical_commit: bool) -> usize {
++    if critical_commit {
++        0
++    } else if host_pressure {
++        limit.min(1)
++    } else {
++        limit
++    }
++}
++
+ fn spares(memory: Option<[u64; 4]>, keep: bool) -> usize {
+     match memory {
+         Some([budget, used, ..]) if keep && u128::from(used) * 100 < u128::from(budget) * 85 => SPARE_KEPT,
+@@ -754,12 +750,12 @@ mod tests {
+         for i in 0..12 {
+             pool.add(i, 0);
+         }
+-        pool.reclaim(0, SPARE_KEPT, true);
++        pool.reclaim(0, staging_spares(SPARE_KEPT, false, false), true);
+         assert_eq!(pool.blocks(), STAGING_KEPT + 1);
+-        pool.reclaim(REST - 1, SPARE, true);
+-        assert_eq!(pool.blocks(), SPARE + 1);
++        pool.reclaim(REST - 1, staging_spares(SPARE_KEPT, true, false), true);
++        assert_eq!(pool.blocks(), 2);
+         assert_eq!(pool.resting.len(), 1);
+-        pool.reclaim(REST, 0, true);
++        pool.reclaim(REST, staging_spares(SPARE_KEPT, true, true), true);
+         assert_eq!(pool.blocks(), 1);
+         assert!(pool.resting.is_empty());
+         pool.give(held, REST);
+diff --git a/crates/victory-gpu/src/residency.rs b/crates/victory-gpu/src/residency.rs
+index 1931e0e..4f7d01b 100644
+--- a/crates/victory-gpu/src/residency.rs
++++ b/crates/victory-gpu/src/residency.rs
+@@ -1,22 +1,23 @@
+-//! Host-memory admission for speculative texture work and reusable upload storage.
++//! Host-memory pressure for reusable upload storage and speculative texture work.
+ //!
+ //! From codec-d/cool_fox (641835a4, fabb872a, c64fc9b4, 08e4574d, e94d277a; the
+-//! values of the last). Only with `VICTORY_RESIDENCY=1` ([`on`]): the memory
+-//! of the system is then asked once a second; below 3 GiB of free RAM or 4 GiB
+-//! of commit (out again above 5 / 6) texture prefetch is limited to 64 MiB a
+-//! frame and idle scratch and staging blocks are let go; below 1.5 GiB of
+-//! commit to 16 MiB; the texture pass stops below 512 MiB of commit, new
+-//! staging blocks for textures picked by index below 1 GiB. With 32 GiB of RAM
+-//! or less (or `VICTORY_RESIDENCY_LIMITED=1`) the budgets of a smaller PC.
+-//! Off, nothing here changes anything, except that for 500 ms after the card
+-//! refused memory (E_OUTOFMEMORY) the texture pass stops ([`upload_refused`]).
++//! values of the last). The submission sweep samples free RAM and commit once
++//! a second. At or below 3 GiB of free RAM or 4 GiB of commit it trims idle
++//! scratch and staging blocks, until both reach 5 GiB and 6 GiB again.
++//!
++//! With `VICTORY_RESIDENCY=1` ([`on`]), pressure also limits texture prefetch
++//! to 64 MiB per frame. Below 1.5 GiB of commit the limit is 16 MiB. The
++//! texture pass stops below 512 MiB of commit and new staging blocks for
++//! textures picked by index stop below 1 GiB. Hosts with up to 32 GiB of RAM
++//! (or `VICTORY_RESIDENCY_LIMITED=1`) use the smaller budgets.
++//! An E_OUTOFMEMORY always pauses the texture pass for 500 ms ([`upload_refused`]).
+ use std::sync::OnceLock;
+ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+ use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+ 
+ const MIB: u64 = 1 << 20;
+ 
+-/// `VICTORY_RESIDENCY=1`: the memory budgets of this module (off by default).
++/// `VICTORY_RESIDENCY=1` enables the optional texture limits.
+ pub(crate) fn on() -> bool {
+     static ON: OnceLock<bool> = OnceLock::new();
+     *ON.get_or_init(|| std::env::var_os("VICTORY_RESIDENCY").is_some_and(|v| v == "1"))
+@@ -129,15 +130,15 @@ fn next_pressure(was: bool, physical: u64, commit: u64) -> bool {
+     }
+ }
+ 
+-/// Called by the once-per-second submission sweep. A failed sample keeps the last good state.
+-pub(crate) fn refresh() {
+-    if !on() {
+-        return;
+-    }
+-    let Some(status) = memory_status() else { return };
++/// Returns pressure for the idle upload sweep. A failed sample keeps the last state.
++pub(crate) fn refresh() -> bool {
++    let was = PRESSURED.load(Ordering::Relaxed);
++    let Some(status) = memory_status() else { return was };
+     let (physical, commit) = (status.ullAvailPhys, status.ullAvailPageFile);
+-    HEADROOM.store(physical.min(commit), Ordering::Relaxed);
+-    let was = pressured();
++    let limit_prefetch = on();
++    if limit_prefetch {
++        HEADROOM.store(physical.min(commit), Ordering::Relaxed);
++    }
+     let pressure = next_pressure(was, physical, commit);
+     if pressure != was {
+         PRESSURED.store(pressure, Ordering::Relaxed);
+@@ -151,12 +152,14 @@ pub(crate) fn refresh() {
+                 texture_staging_mib = crate::texture::live_staging_bytes() >> 20,
+                 spare_scratch_mib = crate::host::ALIVE[4].load(Ordering::Relaxed) >> 20,
+                 game_filled_gpu_texture_mib = crate::resource::KINDS[1].load(Ordering::Relaxed) >> 20,
+-                "host memory pressure: limiting texture prefetch and idle upload storage"
++                limit_prefetch,
++                "host memory pressure: reclaiming idle upload storage"
+             );
+         } else {
+             tracing::info!(physical_free_mib = physical >> 20, available_commit_mib = commit >> 20, "host memory pressure cleared");
+         }
+     }
++    pressure
+ }
+ 
+ pub(crate) fn headroom() -> Option<u64> {
+@@ -164,8 +167,9 @@ pub(crate) fn headroom() -> Option<u64> {
+     (bytes != u64::MAX).then_some(bytes)
+ }
+ 
++/// Pressure as seen by speculative texture work.
+ pub(crate) fn pressured() -> bool {
+-    PRESSURED.load(Ordering::Relaxed)
++    on() && PRESSURED.load(Ordering::Relaxed)
+ }
+ 
+ /// True when OS commit headroom is critically low (< 1.5 GiB) or an allocation
+-- 
+2.43.0
+

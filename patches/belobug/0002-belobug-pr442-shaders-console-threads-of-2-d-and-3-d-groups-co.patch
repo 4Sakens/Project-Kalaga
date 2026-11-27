@@ -1,0 +1,227 @@
+From a023216a4251c62ba16eca1da50cf39a95a546ed Mon Sep 17 00:00:00 2001
+From: TinkerBell-90 <131240361+TinkerBell-90@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 02:54:14 +0100
+Subject: [PATCH] Shaders: console threads of 2-D and 3-D groups come from the
+ wave counter
+
+A console-lane program in a 2-D or 3-D group of more than one host wave
+rounded its host wave's first flat id down to the wave size. That is
+exact only when every host wave holds an aligned run of flat ids, which
+GPUs that fill such groups in 2 x 2 quads do not give (#216). These
+programs now take their console threads from wave_base's LDS counter, as
+console wave64 programs on host waves of 32 already do.
+
+The counter gave every host wave a block of 32, a partial wave too, so
+in a group that is not whole waves the partial wave could take a block
+in the middle: with a console wave64 program in a 10 x 10 group on host
+waves of 32, ids 68 to 95 were never produced. A full wave now adds the
+wave size, and a partial wave takes the last block, which the console's
+last wave holds.
+---
+ crates/victory-shader/src/emit/lower.rs       | 60 ++++++++++++++----
+ .../victory-shader/src/emit/wave64_tests.rs   | 62 +++++++++++++++++++
+ 2 files changed, 111 insertions(+), 11 deletions(-)
+
+diff --git a/crates/victory-shader/src/emit/lower.rs b/crates/victory-shader/src/emit/lower.rs
+index 3fd67c9..2c15dc6 100644
+--- a/crates/victory-shader/src/emit/lower.rs
++++ b/crates/victory-shader/src/emit/lower.rs
+@@ -359,6 +359,8 @@ struct Lower<'a> {
+     /// A console wave64 program in host waves of 32: the LDS dword counting the console threads
+     /// handed to host waves (`wave_base`), and the base made in the entry block.
+     halves: Option<u32>,
++    /// The same counter for console lanes in a 2-D or 3-D group of more than one host wave.
++    tickets: Option<u32>,
+     wave_base: Option<V>,
+     /// A partial final group (`USER_DISPATCH_THREADS_X`) whose console waves are two host
+     /// waves: the threads past the count stay for the exchange's group barriers, so they
+@@ -1947,6 +1949,7 @@ impl<'a> Lower<'a> {
+         let mut exchange: Option<(u32, bool, Vec<bool>)> = None;
+         // a console wave64 program in host waves of 32: the LDS dword of `wave_base`'s counter
+         let mut halves: Option<u32> = None;
++        let mut tickets: Option<u32> = None;
+         if let StageIo::Cs(cs) = x.native.io {
+             s.threads = Some(cs.threads);
+             s.lds_dwords = cs.lds_bytes() / 4;
+@@ -2073,6 +2076,16 @@ impl<'a> Lower<'a> {
+                 // console threads go to host waves in the order the waves take them (`wave_base`)
+                 halves = Some(s.lds_dwords);
+                 s.lds_dwords += 1;
++            } else if console_lanes
++                && group > wave
++                && cs.threads[1..].iter().any(|&d| d > 1)
++                && s.lds_dwords < 8192
++            {
++                // A GPU need not give a host wave an aligned run of flat ids in a 2-D or 3-D
++                // group (2 x 2 quads, #216): the waves take their console threads from the
++                // same counter (one more dword, within D3D12's 32 KiB)
++                tickets = Some(s.lds_dwords);
++                s.lds_dwords += 1;
+             }
+             if console_lanes || one_wave && s.lds_dwords > 0 {
+                 s.wave_size = Some(wave);
+@@ -2241,6 +2254,7 @@ impl<'a> Lower<'a> {
+             clane: None,
+             pair: None,
+             halves,
++            tickets,
+             partial_active: None,
+             wave_base: None,
+             flat: None,
+@@ -4764,13 +4778,16 @@ impl<'a> Lower<'a> {
+         }
+     }
+ 
+-    /// A console wave64 program in host waves of 32: the first console thread of this host wave
+-    /// (0, 32, 64, ...). A GPU need not give a host wave consecutive thread indices (NVIDIA's
+-    /// 8 x 8 groups), so each wave takes the next 32 from an LDS counter instead: every thread
+-    /// zeroes it, the group meets, each wave's first lane adds 32 and the wave takes what it
+-    /// found. Branch-free, in the entry block, which every thread runs.
++    /// A console wave64 program in host waves of 32, or console lanes in a 2-D or 3-D group
++    /// (`tickets`): the first console thread of this host wave (0, wave, 2 wave, ...). A GPU
++    /// need not give a host wave consecutive thread indices (NVIDIA's 8 x 8 groups, 2 x 2 quads
++    /// on AMD, #216), so each wave takes the next block from an LDS counter instead: every
++    /// thread zeroes it, the group meets, each full wave's first lane adds the wave size and
++    /// the wave takes what it found. A partial wave (a group that is not whole waves) takes the
++    /// last block, which the console's last wave holds. Branch-free, in the entry block, which
++    /// every thread runs.
+     fn wave_base(&mut self) -> Option<V> {
+-        let slot = self.halves?;
++        let slot = self.halves.or(self.tickets)?;
+         if let Some(v) = self.wave_base {
+             return Some(v);
+         }
+@@ -4783,18 +4800,38 @@ impl<'a> Lower<'a> {
+         self.group_sync(e);
+         let lane = self.s.op(e, "waveGetLaneIndex", Attr::ReadOnly, i32t, 111, &[]);
+         let first = self.s.m.cmp(e, pred::EQ, lane, zero);
+-        let k32 = self.s.m.i32(32);
+-        let add = self.s.m.select(e, first, k32, zero);
++        let wave = self.s.wave_size.expect("set with console lanes");
++        let size = self.s.m.i32(wave);
++        let threads = self.s.threads.expect("compute").iter().product::<u32>();
++        let tail = threads % wave;
++        // (a full wave counts `wave` lanes running)
++        let full = (tail != 0).then(|| {
++            let yes = self.s.m.bool(true);
++            let count = self.s.op(e, "waveAllOp", Attr::NoUnwind, i32t, 135, &[yes]);
++            self.s.m.cmp(e, pred::EQ, count, size)
++        });
++        let takes = match full {
++            Some(full) => self.s.m.bin(e, Bin::And, first, full),
++            None => first,
++        };
++        let add = self.s.m.select(e, takes, size, zero);
+         let ptr = self.s.m.element(e, lds, k);
+         let old = self.s.m.atomic(e, Rmw::Add, ptr, add);
+         let base = self.s.op(e, "waveReadLaneFirst.i32", Attr::NoUnwind, i32t, 118, &[old]);
++        let base = match full {
++            Some(full) => {
++                let last = self.s.m.i32(threads - tail);
++                self.s.m.select(e, full, base, last)
++            }
++            None => base,
++        };
+         self.s.flags |= flags::WAVE_OPS;
+         self.wave_base = Some(base);
+         Some(base)
+     }
+ 
+     /// The console thread index of this thread in the group: `wave_base` plus the host lane
+-    /// (host waves of 32), else the wave's first thread index rounded down plus the lane.
++    /// (`halves`, `tickets`), else the wave's first thread index rounded down plus the lane.
+     fn console_thread(&mut self) -> V {
+         let (e, i32t) = (self.s.entry, self.s.t.i32);
+         let lane = self.s.op(e, "waveGetLaneIndex", Attr::ReadOnly, i32t, 111, &[]);
+@@ -5247,7 +5284,8 @@ impl<'a> Lower<'a> {
+     /// thread is relabelled so that its host lane is its console lane: the
+     /// flat id is the wave's first lane's, rounded down to the wave size,
+     /// plus the lane index. (A bijection while each host wave holds a
+-    /// wave-aligned run of flat ids, as the console's waves do.)
++    /// wave-aligned run of flat ids, as the console's waves do; 2-D and 3-D
++    /// groups of more than one host wave take `wave_base` instead.)
+     fn thread_id(&mut self, c: u8) -> Val {
+         if !self.console_lanes {
+             return self.compute_id("threadIdInGroup.i32", 95, c);
+@@ -5255,7 +5293,7 @@ impl<'a> Lower<'a> {
+         let [x, y, _] = self.s.threads.expect("compute");
+         let e = self.s.entry;
+         let i32t = self.s.t.i32;
+-        if self.halves.is_some() {
++        if self.halves.is_some() || self.tickets.is_some() {
+             let f = self.console_thread();
+             self.s.flags |= flags::WAVE_OPS;
+             let (xk, yk, xy) = (self.s.m.i32(x), self.s.m.i32(y), self.s.m.i32(x * y));
+diff --git a/crates/victory-shader/src/emit/wave64_tests.rs b/crates/victory-shader/src/emit/wave64_tests.rs
+index 72e2cf6..e4b7474 100644
+--- a/crates/victory-shader/src/emit/wave64_tests.rs
++++ b/crates/victory-shader/src/emit/wave64_tests.rs
+@@ -1837,3 +1837,65 @@ fn a_backward_permute_reads_within_the_lanes_half() {
+     }
+     eprintln!("ran on the hardware device (threads, host wave): {ran:?}");
+ }
++
++/// Console lanes in a 2-D or 3-D group of more than one host wave (#216). Each thread computes
++/// its flat id f from v0..v2, reads lane 0's (`v_readlane`, so the program gets console lanes)
++/// and adds that + 1 to dword f. As on the console, every dword gets exactly one add, of 1 + its
++/// wave's first id. A GPU may fill such a group in 2 x 2 quads, where rounding a host wave's
++/// first flat id down to the wave size gave two waves the same ids; 10 x 10, 12 x 12 and 24 x 8
++/// end in a partial wave. Console waves of 32 and 64 on host waves of their size, and console
++/// waves of 64 on host waves of 32.
++#[test]
++fn console_threads_of_multidimensional_groups_are_one_each() {
++    let mut ran = Vec::new();
++    for (wave64, host_wave) in [(false, 32), (true, 64), (true, 32)] {
++        let w: u32 = if wave64 { 64 } else { 32 };
++        for threads in [[w, 2, 1], [32, 2, 2], [10, 10, 1], [12, 12, 1], [24, 8, 1]] {
++            let [x, y, _] = threads;
++            let n: u32 = threads.iter().product();
++            let body = [
++                0xBF8C_C07F, // s_waitcnt lgkmcnt(0)
++                0xD569_0005,
++                0x0001_FF01,
++                x, // v_mul_lo_u32 v5, v1, X
++                0xD569_0006,
++                0x0001_FF02,
++                x * y,       // v_mul_lo_u32 v6, v2, XY
++                0x4A08_0B00, // v_add_nc_u32 v4, v0, v5
++                0x4A08_0D04, // v_add_nc_u32 v4, v4, v6
++                0xD760_000C,
++                0x0001_0104, // v_readlane_b32 s12, v4, 0
++                0x7E04_020C, // v_mov_b32 v2, s12
++                0x4A04_0481, // v_add_nc_u32 v2, 1, v2
++                0x3406_0882, // v_lshlrev_b32 v3, 2, v4
++                0xE0C8_1000,
++                0x8002_0203, // buffer_atomic_add v2, v3, s[8:11], 0 offen
++            ];
++            let mut native = native_of(&body, wave64, 1);
++            // (thread ids x, y and z in v0..v2)
++            native.io = StageIo::Cs(ComputeIo {
++                rsrc2: 5 << 1 | 2 << 11,
++                threads,
++            });
++            let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
++            let what = format!("console wave{w}, host waves of {host_wave}, {threads:?}");
++            let shader = lowered_on(&native, &p, &HashSet::new(), host_wave)
++                .unwrap_or_else(|e| panic!("{what}: {e:?}"));
++            if let Ok(mut v) =
++                validator::Validator::load(validator::Validator::default_path().as_deref())
++            {
++                v.validate(&mut shader.dxil.clone())
++                    .expect("DXIL validation failed");
++            }
++            let _one = super::valu_tests::ONE_AT_A_TIME
++                .lock()
++                .unwrap_or_else(|e| e.into_inner());
++            if let Some(out) = whole_uav(&shader, [0, 0], n) {
++                let want: Vec<u32> = (0..n).map(|t| 1 + (t & !(w - 1))).collect();
++                assert_eq!(out, want, "{what}");
++                ran.push(what);
++            }
++        }
++    }
++    eprintln!("ran on the hardware device: {ran:#?}");
++}
+-- 
+2.43.0
+

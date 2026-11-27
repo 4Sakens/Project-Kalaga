@@ -1,0 +1,153 @@
+From 184da29e969c3def1b9b9d188b8c19998abb4dc8 Mon Sep 17 00:00:00 2001
+From: TinkerBell-90 <131240361+TinkerBell-90@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 23:16:10 +0100
+Subject: [PATCH] Shaders: ds_bpermute_b32 reads within the lane's 32-lane half
+
+GFX10 runs ds_bpermute_b32 on each half of a wave of 64 on its own:
+lane l reads lane (l & 32) | (address / 4 & 31). LLVM says so
+(supportsWaveWideBPermute is false for GFX10 and GFX11 in wave64), and
+so does Mesa's ACO ("ds_bpermute is restricted to 32 lanes on
+GFX10-GFX11.7").
+
+The translation read lane (address / 4 & 63): on 64-lane hosts a lane
+naming the other half read it, and on 32-lane hosts the program was
+refused as a permute across two host waves. It now reads within the
+half in both forms, and ds_bpermute no longer makes a console wave64
+program exchange between its host waves.
+---
+ crates/victory-shader/src/emit/lower.rs       | 43 ++++++++++---------
+ .../victory-shader/src/emit/wave64_tests.rs   | 37 ++++++++++++++++
+ 2 files changed, 59 insertions(+), 21 deletions(-)
+
+diff --git a/crates/victory-shader/src/emit/lower.rs b/crates/victory-shader/src/emit/lower.rs
+index babb613..2091c87 100644
+--- a/crates/victory-shader/src/emit/lower.rs
++++ b/crates/victory-shader/src/emit/lower.rs
+@@ -1859,19 +1859,18 @@ impl<'a> Lower<'a> {
+             let one_wave = group <= wave;
+             // A host whose waves are at most 32 lanes (NVIDIA) refuses `WaveSize(64)`. A console
+             // wave64 program whose cross-lane code stays inside 32-lane halves – DPP rows,
+-            // `ds_swizzle`, `v_permlane16` / `v_permlanex16`, which the ISA confines there – runs
+-            // exactly in waves of 32: the thread relabelling makes each host wave one half of a
+-            // console wave (lanes 32k..32k+31). Not when it crosses halves (`v_mbcnt`,
+-            // `v_readlane`, `v_writelane`, `ds_(b)permute`, masks as numbers or lane-constant
+-            // masks), nor when LDS may be shared within the console wave without barriers (a
+-            // group over 32 threads with LDS): those still need 64-lane waves.
++            // `ds_swizzle`, `v_permlane16` / `v_permlanex16`, `ds_bpermute`, which the ISA
++            // confines there – runs exactly in waves of 32: the thread relabelling makes each host
++            // wave one half of a console wave (lanes 32k..32k+31). Not when it crosses halves
++            // (`v_mbcnt`, `v_readlane`, `v_writelane`, `ds_permute`, masks as numbers or
++            // lane-constant masks), nor when LDS may be shared within the console wave without
++            // barriers (a group over 32 threads with LDS): those still need 64-lane waves.
+             if wave == 64 && host_max_wave() == 32 && (console_lanes || one_wave && s.lds_dwords > 0) {
+                 let crosses = insts().any(|i| {
+                     let n = i.name();
+                     n.starts_with("v_mbcnt")
+                         || matches!(n, "v_readlane_b32" | "v_writelane_b32")
+                         || n.starts_with("ds_permute")
+-                        || n.starts_with("ds_bpermute")
+                         || reads_mask_as_data(x.st, i)
+                 }) || lane_constant_masks(x.st)
+                     || !x.st.wide.is_empty();
+@@ -1931,8 +1930,8 @@ impl<'a> Lower<'a> {
+                             "v_readlane"
+                         } else if n == "v_writelane_b32" {
+                             "v_writelane"
+-                        } else if n.starts_with("ds_permute") || n.starts_with("ds_bpermute") {
+-                            "ds_(b)permute"
++                        } else if n.starts_with("ds_permute") {
++                            "ds_permute"
+                         } else if reads_mask_as_data(x.st, i) {
+                             "mask as data"
+                         } else {
+@@ -5564,28 +5563,30 @@ impl<'a> Lower<'a> {
+         }
+         if name == "ds_bpermute_b32" {
+             // Backward permute: no LDS is touched. Each lane takes the data
+-            // register of the lane its address names, (address + offset) / 4
+-            // within the wave; a source lane outside EXEC gives 0. (
+-            // the title's checkerboard shadow-mask generators read their
+-            // neighbours' samples with it; without them every shadowed light
+-            // was multiplied by an empty mask.)
++            // register of the lane its address names, (address + offset) / 4,
++            // within its own 32-lane half: GFX10 permutes the two halves of a
++            // wave of 64 on their own (LLVM's `supportsWaveWideBPermute`, Mesa
++            // ACO's `emit_bpermute`). So lane l reads lane (l & 32) | that & 31,
++            // in the same host wave on hosts of 32 lanes too. A source lane
++            // outside EXEC gives 0. (The title's checkerboard shadow-mask
++            // generators read their neighbours' samples with it; without them
++            // every shadowed light was multiplied by an empty mask.)
+             // shortcut: a source lane that is not at this instruction on the
+             // host (it left through a branch, not a guard) is read as the
+             // host gives it; the console reads 0.
+             self.cross_lane(false)?;
+-            if self.exchange.as_ref().is_some_and(|e| !e.1) {
+-                // a console wave of 64 run as two host waves: the lane named
+-                // may be in the other one
+-                return Err("a lane permute across two host waves");
+-            }
+             let at = self.vgprs(inst, addr.as_ref().ok_or("a permute address")?, 1)?[0];
+             let x = self.vgprs(inst, data.first().ok_or("a permute source")?, 1)?[0];
+             let o = self.s.m.i32(offset);
+             let at = self.s.m.bin(c, Bin::Add, at, o);
+             let two = self.s.m.i32(2);
+             let src = self.s.m.bin(c, Bin::LShr, at, two);
+-            let last = self.s.m.i32(self.wave() - 1);
+-            let src = self.s.m.bin(c, Bin::And, src, last);
++            let k31 = self.s.m.i32(31);
++            let src = self.s.m.bin(c, Bin::And, src, k31);
++            let lane = self.lane_index();
++            let k32 = self.s.m.i32(32);
++            let half = self.s.m.bin(c, Bin::And, lane, k32);
++            let src = self.s.m.bin(c, Bin::Or, src, half);
+             let x = match guard {
+                 Some(g) => {
+                     let z = self.s.m.i32(0);
+diff --git a/crates/victory-shader/src/emit/wave64_tests.rs b/crates/victory-shader/src/emit/wave64_tests.rs
+index ffea5ca..6f7626b 100644
+--- a/crates/victory-shader/src/emit/wave64_tests.rs
++++ b/crates/victory-shader/src/emit/wave64_tests.rs
+@@ -1374,3 +1374,40 @@ fn both_host_waves_observe_the_lds_flag_after_the_join() {
+     }
+     eprintln!("all 14 flag dispatches passed on a 32-lane hardware adapter");
+ }
++
++/// `ds_bpermute_b32` in a console wave of 64 reads within the lane's own 32-lane half: GFX10
++/// permutes the two halves on their own (LLVM's `supportsWaveWideBPermute`, Mesa ACO's
++/// `emit_bpermute`). Lane t names lane t ^ 33, in the other half, and reads lane t ^ 1. Run on
++/// 64-lane and 32-lane host waves alike; before, the first read t ^ 33 and the second refused.
++#[test]
++fn a_backward_permute_reads_within_the_lanes_half() {
++    let body = [
++        0x3A08_00A1, // v_xor_b32 v4, 33, v0
++        0x3408_0882, // v_lshlrev_b32 v4, 2, v4
++        0xDACC_0000,
++        0x0200_0004, // ds_bpermute_b32 v2, v4, v0
++        0xBF8C_C07F, // s_waitcnt lgkmcnt(0)
++        0x3402_0082, // v_lshlrev_b32 v1, 2, v0
++        0xE070_1000,
++        0x8002_0201, // buffer_store_dword v2, v1, s[8:11], 0 offen
++    ];
++    let mut ran = Vec::new();
++    for threads in [64, 128] {
++        let native = native_of(&body, true, threads);
++        let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
++        for host_wave in [64, 32] {
++            let shader = lowered_on(&native, &p, &HashSet::new(), host_wave)
++                .unwrap_or_else(|e| panic!("{threads} threads, host waves of {host_wave}: {e:?}"));
++            if let Ok(mut v) = validator::Validator::load(validator::Validator::default_path().as_deref()) {
++                v.validate(&mut shader.dxil.clone()).expect("DXIL validation failed");
++            }
++            let _one = super::valu_tests::ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
++            if let Some(out) = whole_uav(&shader, [0, 0], threads) {
++                let want: Vec<u32> = (0..threads).map(|t| t ^ 1).collect();
++                assert_eq!(out, want, "{threads} threads, host waves of {host_wave}");
++                ran.push((threads, host_wave));
++            }
++        }
++    }
++    eprintln!("ran on the hardware device (threads, host wave): {ran:?}");
++}
+-- 
+2.43.0
+

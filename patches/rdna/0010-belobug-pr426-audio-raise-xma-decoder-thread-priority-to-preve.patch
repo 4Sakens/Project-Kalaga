@@ -1,0 +1,35 @@
+From 5ecf7d2fd2d9e488c5da5adfa52e524af2b0afb4 Mon Sep 17 00:00:00 2001
+From: finegorko <finegorko@gmail.com>
+Date: Fri, 27 Nov 2026 03:59:38 +0300
+Subject: [PATCH] Audio: raise XMA decoder thread priority to prevent CPU-load
+ crackle
+
+---
+ crates/victory-hle/src/modules/audio.rs | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/crates/victory-hle/src/modules/audio.rs b/crates/victory-hle/src/modules/audio.rs
+index df687d4..125c4fd 100644
+--- a/crates/victory-hle/src/modules/audio.rs
++++ b/crates/victory-hle/src/modules/audio.rs
+@@ -704,6 +704,17 @@ fn wake_decoder() {
+             std::thread::Builder::new()
+                 .name("victory XMA decoder".into())
+                 .spawn(|| {
++                    #[cfg(windows)]
++                    {
++                        use windows_sys::Win32::System::Threading::{
++                            GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_HIGHEST,
++                        };
++                        // A 256-byte XMA block lasts 2.7 ms; keep decoding ahead of
++                        // thin-list and pipeline workers so high CPU load does not
++                        // starve the output ring into robotic/crackling audio.
++                        // SAFETY: GetCurrentThread is a pseudo-handle to this thread.
++                        unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) };
++                    }
+                     loop {
+                         xma().pump();
+                         // A 256-byte output block lasts 2.7 ms at 48 kHz mono.
+-- 
+2.43.0
+
