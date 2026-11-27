@@ -1,0 +1,115 @@
+From 48373b7ba9797b057e28619d5ffcb6f11f5a28eb Mon Sep 17 00:00:00 2001
+From: Bartosz <256132878+Moon0755@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 11:28:47 +0100
+Subject: [PATCH] Shaders: v_fmac_f32 in VOP3 applies abs and neg to its
+ accumulator
+
+In the VOP3 encoding, bit 2 of abs and of neg names the accumulator of
+v_fmac_f32, which is the destination register. RDNA2 computes
+fma(a, b, -d) and fma(a, b, |d|) with them; the lowering read the
+accumulator without them.
+
+The expected values of the new test are 16 rows measured on RDNA2
+(gfx1031) with IEEE mode off and f32 denormals flushed, published by
+the AnyPS5 project in VFmacF32AccumulatorModifiers.cpp. No code is
+taken from that project.
+
+v_mac_f32 and v_mac_legacy_f32 share the arm and get the same
+treatment; there is no measurement for those two.
+
+Co-Authored-By: Gemini 4 Neon <noreply@google.com>
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+(cherry picked from commit cf8f543c64f2c02d2007de922a8ecfe01b0e3e11)
+
+[Vice-Tay: this tree has no semantics_tests.rs; the rows run in
+valu_tests.rs on the host GPU and WARP, NaNs compared as any NaN. The
+v_mac_legacy_f32 accumulator goes into legacy_fmad with the modifiers
+applied.]
+
+(cherry picked from commit 8fe3ccddc73d0ce2ef4d89a9469f24ccdebfe87e)
+---
+ crates/victory-shader/src/emit/lower.rs      |  9 +++-
+ crates/victory-shader/src/emit/valu_tests.rs | 44 ++++++++++++++++++++
+ 2 files changed, 52 insertions(+), 1 deletion(-)
+
+diff --git a/crates/victory-shader/src/emit/lower.rs b/crates/victory-shader/src/emit/lower.rs
+index 9a598a5..b7233b9 100644
+--- a/crates/victory-shader/src/emit/lower.rs
++++ b/crates/victory-shader/src/emit/lower.rs
+@@ -9215,13 +9215,20 @@ impl<'a> Lower<'a> {
+                     return Err("an accumulator");
+                 };
+                 let acc = inst.read(Reg::V(reg)).ok_or("an accumulator")?;
+-                let acc = match self.floats.get(&acc) {
++                let mut acc = match self.floats.get(&acc) {
+                     Some(&x) => x,
+                     None => {
+                         let x = self.i32_of(acc)?;
+                         self.as_float(x)
+                     }
+                 };
++                if v.abs >> 2 & 1 != 0 {
++                    acc = self.unary(6, acc);
++                }
++                if v.neg >> 2 & 1 != 0 {
++                    let z = self.s.m.f32(0x8000_0000);
++                    acc = self.s.m.bin(c, Bin::Sub, z, acc);
++                }
+                 let r = match name {
+                     "v_fmac_f32" => self.fmad(a, bb, acc),
+                     "v_mac_f32" => {
+diff --git a/crates/victory-shader/src/emit/valu_tests.rs b/crates/victory-shader/src/emit/valu_tests.rs
+index e59c1c7..a7e3775 100644
+--- a/crates/victory-shader/src/emit/valu_tests.rs
++++ b/crates/victory-shader/src/emit/valu_tests.rs
+@@ -2244,3 +2244,47 @@ fn rdna_forms_give_what_the_spelled_out_ones_give() {
+         }
+     }
+ }
++
++/// `v_fmac_f32` in the VOP3 encoding takes `neg[2]` (`-acc`) and `abs[2]` (`|acc|`) on its
++/// accumulator, the destination register (upstream #3158). The rows are measured on RDNA2
++/// (gfx1031, IEEE mode off, f32 denormals flushed) as published by the AnyPS5 project
++/// (`VFmacF32AccumulatorModifiers.cpp`, 85129d854d); a NaN is compared as any NaN, as hosts
++/// give NaNs bits of their own.
++#[test]
++fn v_fmac_f32_takes_the_accumulator_modifiers() {
++    // ([a, b, acc], with neg[2], with abs[2])
++    const ROWS: [([u32; 3], u32, u32); 16] = [
++        ([0x3F80_0000, 0x4000_0000, 0x3F80_0000], 0x3F80_0000, 0x4040_0000),
++        ([0x3F80_0000, 0x4000_0000, 0xBF80_0000], 0x4040_0000, 0x4040_0000),
++        ([0x4000_0000, 0x4040_0000, 0xC0C0_0000], 0x4140_0000, 0x4140_0000),
++        ([0x4000_0000, 0xC040_0000, 0xC0C0_0000], 0x0000_0000, 0x0000_0000),
++        ([0x0000_0000, 0xBF80_0000, 0x0000_0000], 0x8000_0000, 0x0000_0000),
++        ([0x0000_0000, 0xBF80_0000, 0x8000_0000], 0x0000_0000, 0x0000_0000),
++        ([0x3F80_0000, 0x3F80_0000, 0x7F80_0000], 0xFF80_0000, 0x7F80_0000),
++        ([0x3F80_0000, 0x3F80_0000, 0xFF80_0000], 0x7F80_0000, 0x7F80_0000),
++        ([0x7F80_0000, 0x3F80_0000, 0xFF80_0000], 0x7F80_0000, 0x7F80_0000),
++        ([0x3F80_0000, 0x3F80_0000, 0x7FC0_0001], 0xFFC0_0001, 0x7FC0_0001),
++        ([0x3F80_0000, 0x3F80_0000, 0xFFA0_0000], 0x7FA0_0000, 0x7FA0_0000),
++        ([0x3F80_0000, 0x3F80_0000, 0x0000_0001], 0x3F80_0000, 0x3F80_0000),
++        ([0x0080_0000, 0x3F80_0000, 0x8080_0001], 0x0100_0000, 0x0100_0000),
++        ([0x4040_0000, 0x3EAA_AAAB, 0xBF80_0000], 0x4000_0000, 0x4000_0000),
++        ([0x7F7F_FFFF, 0x4000_0000, 0xFF7F_FFFF], 0x7F80_0000, 0x7F80_0000),
++        ([0xBF80_0000, 0x4000_0000, 0x4000_0000], 0xC080_0000, 0x0000_0000),
++    ];
++    let nan = |x: u32| x & 0x7FFF_FFFF > 0x7F80_0000;
++    let cases: Vec<[u32; 4]> = ROWS.iter().map(|&([a, b, acc], _, _)| [a, b, acc, 0]).collect();
++    for (label, abs, neg) in [("neg[2]", 0, 4), ("abs[2]", 4, 0)] {
++        // v_mov_b32 v5, v3; v_fmac_f32 v5, v1, v2 (VOP3, the modifier on src2); v_mov_b32 v0, v5
++        let mut body = vec![vop1(0x001, 5, vgpr(3))];
++        body.extend(vop3_mod(0x12B, 5, vgpr(1), vgpr(2), 0, abs, neg, 0, false));
++        body.push(vop1(0x001, 0, vgpr(5)));
++        let shader = build_valu_cs(&body);
++        run_cases(&shader, &cases, |backend, i, _, got| {
++            let want = if neg != 0 { ROWS[i].1 } else { ROWS[i].2 };
++            assert!(
++                got == want || nan(got) && nan(want),
++                "{backend}: {label} row {i}: {got:#010x}, want {want:#010x}"
++            );
++        });
++    }
++}
+-- 
+2.43.0
+

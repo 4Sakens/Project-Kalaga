@@ -1,0 +1,43 @@
+From cc15c4576cd120472844f38913603fffd4b3eb3e Mon Sep 17 00:00:00 2001
+From: kripotker <81074184+kripotker@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 09:16:53 -0300
+Subject: [PATCH] resource: under PC memory pressure, idle texture copies go
+ after 5 s
+
+The sweep kept idle host textures for minutes while the card had room,
+but what the card spills to system memory is commit too: at 18 minutes
+the process held 41 GB private with 1.4 GB of commit left. With idle
+copies let go after 5 s under pressure, the same point was 28.5 GB
+private and 11.9 GB on the card (was 20.5), at 57.6 ms a frame (was 63.6),
+as measured on avatarmanz/VIctory-7900XTX #206.
+
+Here the pressure signal is always on (residency::refresh, no
+VICTORY_RESIDENCY switch), so play.ps1 is left as it is.
+
+(cherry picked from commit f4497a7cb2d040aa6126c7fd854ed23f7d8d85e9, in part)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 00a21ef45880f4d194c39a1a859735b1c274dcaa)
+---
+ crates/victory-gpu/src/resource.rs | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/crates/victory-gpu/src/resource.rs b/crates/victory-gpu/src/resource.rs
+index d306875..6b1d9a8 100644
+--- a/crates/victory-gpu/src/resource.rs
++++ b/crates/victory-gpu/src/resource.rs
+@@ -2133,7 +2133,11 @@ pub(crate) fn let_go_idle() {
+     static KEEP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+     let keep = *KEEP
+         .get_or_init(|| !matches!(std::env::var("VICTORY_TEXTURE_KEEP").as_deref(), Ok("0") | Ok("1")));
++    // The card's room says nothing of the PC's: what the card spills to
++    // system memory is commit too. Short of it ([`crate::residency::pressured`]),
++    // idle copies go after seconds, not the minutes room on the card keeps them.
+     let (idle_ms, most) = match memory {
++        _ if crate::residency::pressured() => (5_000, u64::MAX),
+         Some([budget, used, ..]) if keep => {
+             let used = used.saturating_sub(crate::pool::texture_room())
+                 + crate::shadow::card_room_kept()
+-- 
+2.43.0
+

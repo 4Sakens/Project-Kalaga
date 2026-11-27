@@ -1,0 +1,84 @@
+From 8c7f54d6ea3fc617d711b5804df5a1ddee4a8776 Mon Sep 17 00:00:00 2001
+From: Filip Michalski <37023444+Filip722@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 01:08:05 -0300
+Subject: [PATCH] Keep pipeline workers running after a build panic
+
+Finish the failed entry and wake waiters. Keep later jobs on the same worker and cache the failure for repeated requests.
+
+Adapted from fxceless/victory-fork #1353 and rorodev6/victory-nvidia-megafork b5fc03002ef4ce7a8804322994b742afe0661980.
+
+(cherry picked from commit 7168410d7494e4a8407cea2bd38a83dbb4283c69)
+---
+ crates/victory-gpu/src/pipeline/make.rs | 36 ++++++++++++++++++++++++-
+ 1 file changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/crates/victory-gpu/src/pipeline/make.rs b/crates/victory-gpu/src/pipeline/make.rs
+index 4eb891d..7e3ad6d 100644
+--- a/crates/victory-gpu/src/pipeline/make.rs
++++ b/crates/victory-gpu/src/pipeline/make.rs
+@@ -22,6 +22,7 @@
+ //! 18e57db8 found the same).
+ 
+ use std::collections::VecDeque;
++use std::panic::{AssertUnwindSafe, catch_unwind};
+ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+ use std::sync::{Arc, Condvar, Mutex, OnceLock};
+ use std::time::{Duration, Instant};
+@@ -80,13 +81,23 @@ impl Pending {
+     }
+ 
+     fn make(&self) {
+-        self.made.get_or_init(|| {
++        self.make_with(|| {
+             let _building = crate::timeline::span("pipeline: build a host pipeline");
+             let began = Instant::now();
+             let made = HostPipeline::new(&self.shaders, self.graphics.as_deref());
+             super::library::note_time(&self.key, began.elapsed().as_millis() as u64);
+             made
+         });
++    }
++
++    fn make_with(&self, build: impl FnOnce() -> Option<HostPipeline>) {
++        self.made.get_or_init(|| match catch_unwind(AssertUnwindSafe(build)) {
++            Ok(pipeline) => pipeline,
++            Err(_) => {
++                tracing::warn!(key = self.key, shaders = ?self.shaders, "host pipeline build panicked");
++                None
++            }
++        });
+         let (lock, done) = &DONE;
+         let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
+         done.notify_all();
+@@ -526,6 +537,29 @@ fn drained() {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn a_panicking_pipeline_is_refused_and_the_worker_continues() {
++        let failed = Arc::new(Pending::new(Vec::new(), None));
++        let next = Arc::new(Pending::new(Vec::new(), None));
++        let failed_job = Arc::clone(&failed);
++        let next_job = Arc::clone(&next);
++        std::thread::spawn(move || {
++            failed_job.make_with(|| panic!("synthetic pipeline build panic"));
++            next_job.make_with(|| None);
++        })
++        .join()
++        .expect("the pipeline worker should survive");
++
++        assert!(matches!(failed.made.get(), Some(None)));
++        assert!(matches!(next.made.get(), Some(None)));
++        let mut rebuilt = false;
++        failed.make_with(|| {
++            rebuilt = true;
++            None
++        });
++        assert!(!rebuilt);
++    }
++
+     #[test]
+     fn worker_count_follows_the_processors_and_the_switch() {
+         assert_eq!(worker_count(None, 1), 2);
+-- 
+2.43.0
+

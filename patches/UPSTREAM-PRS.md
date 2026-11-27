@@ -71,3 +71,32 @@ To test one, put it in `[launch.extra_env]`, e.g. `VICTORY_LIST_IDLE_TRIM_S = '3
 | Second pass (2026-11-27 03:00 UTC): Belobug #451 exact-buffer pool rewrite (642 lines, perf), #453 "Radeon renderer fixes" bundle (576 lines, mixed), #444 (12 GB cards only); Vice-Tay #118 (readback-pool only), #125 monitor choice, #126 RAM keep-alive (Vice-Tay's RAM throttle only) | Not for this PC, too broad to take blind, or Vice-Tay-only code |
 | Belobug #432 frame-rate samples for benchmarks | Useful for a future `kalaga bench`; not needed to play |
 | Geometry shaders (#433), DualSense (#420, #367), Wine (#421), RDNA4 compiler (#422), translations, docs, tests-only PRs | Not about this PC or not about playing |
+
+## Third pass: what the sibling trees fixed since VIctory-RDNA split off (2026-11-27)
+
+VIctory-RDNA, Belobug and AvatarManz all branch from `c9c932c` (2026-11-26);
+Vice-Tay merges from all of them. The commits since then that VIctory-RDNA
+lacks were read (Belobug 31, AvatarManz 18, Vice-Tay 191) and these taken,
+cherry-picked with `-x` (author and source commit kept):
+`patches/rdna/0023-0042`, `patches/belobug/0021-0033` (those Belobug did not
+already have and that apply).
+
+| Source | What | Kind |
+|---|---|---|
+| Vice-Tay 00a21ef (from AvatarManz #206) | Under memory pressure idle texture copies go after 5 s. Measured on an RX 7900 XTX: 41 → 28.5 GB private at 18 min, 63.6 → 57.6 ms a frame. **The one for 32 GB** | memory, speed |
+| Vice-Tay bd27027, 44b3757, 4ff4ea1 | Snapshot pool: let go of it when idle and shrink it under memory pressure; less lock contention between list threads | memory, CPU |
+| AvatarManz 631400f, 3e04ca0, 15c3d0e | Renderer port 1 (`VICTORY_PORT_CONSTANTS`, on in the fast sets) ordering: indirect executions whose arguments the card reads in place are clamped alone. Its README: tree and lamp-lit room **flicker fixed** | picture |
+| AvatarManz 4da7c0b, 8eaf2dc, 4aeb6d0 (rdna only) | Renderer port 2 (`VICTORY_PORT_DESCRIPTORS`): the frame allocator's table copies hooked; the fallback keeps the port's budget | picture, CPU |
+| Belobug 5d6bd84 (rdna; Belobug has it) | Title textures uploaded in the submission prelude: **frame-order texture flicker** fixed | picture |
+| Vice-Tay 8d56dd9 | BC7 channel rotation only in modes 4 and 5: **wrong texture colours** | picture |
+| Vice-Tay 8fe3ccd | `v_fmac_f32` (VOP3) applies abs/neg to its accumulator: wrong shader maths. Only its own test kept (the conflict held Vice-Tay-only tests) | picture |
+| Vice-Tay 17e3e2c | Wave sections scanned past an unmatched saveexec | picture |
+| Vice-Tay 8cbd5cb, 53a1f16 | Texture retry deadlines kept when card room returns; pending texture changes kept when queues fill: **late or stale textures** | picture |
+| Vice-Tay 7168410 (rdna only) | A panic while building one pipeline no longer kills its worker (every later pipeline on it went missing). Only its own test kept | stability |
+| Vice-Tay 1fa36ec, c133996, 903aa10 (rdna only for two) | Warm-up worker failures; warm-up skipped when the title made no pipeline cache; device-loss range pattern | stability |
+
+Not taken: Belobug 4ad8527 (port 2 sync parts) competes with AvatarManz's
+port 2 rework above; Vice-Tay 3fe4811, 5307ba7, 7993c1b, e95a2f5, a550e0c
+conflict with code these trees changed differently. Vice-Tay 2b51c6c (21 → 6
+fps from exact copies of structured views) concerns cards without raw-twin
+heaps (its RTX 4090); not this tree's path on AMD.

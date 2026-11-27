@@ -1,0 +1,61 @@
+From d6bec87537b6a5b7779163b67d907b8e470e120b Mon Sep 17 00:00:00 2001
+From: Taynan Piza <157688638+TaynanGT@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 19:32:11 -0300
+Subject: [PATCH] Skip pipeline warm-up when the title has not created a
+ pipeline cache
+
+(cherry picked from commit c1339962891d3d2d01d3eec73bce42dc883f897d)
+---
+ apps/victory/src/warm.rs         |  4 ++++
+ apps/victory/tests/warm_empty.rs | 24 ++++++++++++++++++++++++
+ 2 files changed, 28 insertions(+)
+ create mode 100644 apps/victory/tests/warm_empty.rs
+
+diff --git a/apps/victory/src/warm.rs b/apps/victory/src/warm.rs
+index 1e111f2..6224af4 100644
+--- a/apps/victory/src/warm.rs
++++ b/apps/victory/src/warm.rs
+@@ -57,6 +57,10 @@ pub fn run(jobs: Option<usize>, limit: Option<usize>, again: bool, used: bool, t
+     if let Some(these) = these {
+         return make(&dir, &these);
+     }
++    if !dir.try_exists().with_context(|| format!("checking {}", dir.display()))? {
++        println!("0 pipelines known. Run the title with VICTORY_PIPELINE_BOOK=1 to record pipelines before warming.");
++        return Ok(());
++    }
+     let began = Instant::now();
+     victory_hle::known_pipelines::use_translations(dir.with_file_name("shaders"));
+     let fingerprint = known::fingerprint();
+diff --git a/apps/victory/tests/warm_empty.rs b/apps/victory/tests/warm_empty.rs
+new file mode 100644
+index 0000000..5ba53e9
+--- /dev/null
++++ b/apps/victory/tests/warm_empty.rs
+@@ -0,0 +1,24 @@
++#![cfg(windows)]
++
++use std::fs;
++use std::process::Command;
++
++#[test]
++fn warm_used_with_only_a_shader_cache_reports_no_recorded_pipelines() {
++    let cache = tempfile::tempdir().unwrap();
++    fs::create_dir(cache.path().join("shaders")).unwrap();
++
++    let output = Command::new(env!("CARGO_BIN_EXE_victory"))
++        .args(["warm", "--used"])
++        .current_dir(cache.path())
++        .env_remove("VICTORY_CONFIG")
++        .env("VICTORY_CACHE_DIR", cache.path())
++        .env("VICTORY_DATA_DIR", cache.path().join("data"))
++        .output()
++        .unwrap();
++    assert!(output.status.success(), "{output:?}");
++    let stdout = String::from_utf8_lossy(&output.stdout);
++    assert!(stdout.contains("0 pipelines known"), "{stdout}");
++    assert!(stdout.contains("VICTORY_PIPELINE_BOOK=1"), "{stdout}");
++    assert!(!cache.path().join("pipelines").try_exists().unwrap());
++}
+-- 
+2.43.0
+

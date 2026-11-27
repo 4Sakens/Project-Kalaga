@@ -1,0 +1,26 @@
+From 5826065eea8e736259846742f2f6011be73cc2da Mon Sep 17 00:00:00 2001
+From: "meshahid.973" <141939170+meshahid973@users.noreply.github.com>
+Date: Thu, 26 Nov 2026 22:49:23 +0300
+Subject: [PATCH] Fix device loss range pattern
+
+(cherry picked from commit 903aa109ff33b8e44ab34911774e6b1fb90d12a2)
+---
+ apps/victory/src/warm.rs | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/apps/victory/src/warm.rs b/apps/victory/src/warm.rs
+index 4695abc..2f31250 100644
+--- a/apps/victory/src/warm.rs
++++ b/apps/victory/src/warm.rs
+@@ -254,7 +254,7 @@ impl<'a> Progress<'a> {
+ 
+ fn device_loss(status: ExitStatus) -> bool {
+     // DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_HUNG, DXGI_ERROR_DEVICE_RESET.
+-    matches!(status.code().map(|code| code as u32), Some(0x887A0005 | 0x887A0006 | 0x887A0007))
++    matches!(status.code().map(|code| code as u32), Some(0x887A0005..=0x887A0007))
+ }
+ 
+ /// Only return a bad pipeline for a failure attributable to an active pipeline.
+-- 
+2.43.0
+
