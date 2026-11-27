@@ -8,7 +8,12 @@ Each file is the PR's own commit, author and message kept.
 **Status: each series applies cleanly to the base pinned in its
 `UPSTREAM.toml`.** The **Runtimes** workflow (`.github/workflows/runtimes.yml`,
 Actions tab) builds `victory.exe` and runs upstream's tests with the series on
-a Windows machine on every change here and daily; it has not been played yet.
+a Windows machine on every change here and daily. **Verified 2026-11-27
+(run 45929637837): both series build `victory.exe` and pass upstream's whole
+test suite** — VIctory-RDNA 1,046 tests passed (1,026 unpatched: the patches
+add 20), Belobug 1,087 (1,064 unpatched: +23). Two upstream tests that fail
+on a GPU-less runner without our patches too are skipped
+(`patches/rdna/KNOWN-FAILING.txt`). Not played yet.
 Build, then play `-safe` first.
 
 ```powershell
