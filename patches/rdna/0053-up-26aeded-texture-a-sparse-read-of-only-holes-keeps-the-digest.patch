@@ -1,0 +1,86 @@
+From a151f8d9e145b8650fb1580c123b4dc2fd3cde14 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 26 Nov 2026 08:42:27 -0300
+Subject: [PATCH 53/55] texture: a sparse read of only holes keeps the digest
+ of the staged texels
+
+A partly mapped texture is read through its holes, which come back as
+zeros. The partial path stored the digest of every read before checking
+for an all-zero buffer, so a read that caught nothing mapped replaced the
+digest of the texels already detiled, and the next read that found those
+same texels again detiled and uploaded them a second time.
+
+Last::accept_partial now rejects an all-zero read without touching the
+digest. The full read path is unchanged and still accepts a texture that
+really is black or transparent.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 26aeded1d85bc9183b2eabe550ba4273fc39e7a3)
+---
+ crates/victory-gpu/src/texture.rs | 36 +++++++++++++++++++++++++------
+ 1 file changed, 30 insertions(+), 6 deletions(-)
+
+diff --git a/crates/victory-gpu/src/texture.rs b/crates/victory-gpu/src/texture.rs
+index e8ec32a..75e6e7c 100644
+--- a/crates/victory-gpu/src/texture.rs
++++ b/crates/victory-gpu/src/texture.rs
+@@ -108,6 +108,19 @@ struct Last {
+     hot_until: u64,
+ }
+ 
++impl Last {
++    /// A sparse read can consist entirely of zero-filled holes. Keep the
++    /// digest of the texels actually staged until a usable read replaces them.
++    fn accept_partial(&mut self, bytes: &[u8]) -> bool {
++        let hash = digest(bytes);
++        if self.hash == Some(hash) || bytes.iter().all(|&b| b == 0) {
++            return false;
++        }
++        self.hash = Some(hash);
++        true
++    }
++}
++
+ /// Frames a guarded texture is hashed at every check from its first check,
+ /// and after the hash found a change the guard did not see.
+ const HOT_FRAMES: u64 = 64;
+@@ -1339,12 +1352,7 @@ impl Staging {
+             crate::copystat::add(crate::copystat::C::TexHashed, size as u64);
+             let changed = with_read(size, |read| {
+                 crate::host::copy_mapped(read.as_mut_ptr(), self.memory, size, false);
+-                let hash = digest(read);
+-                if last.hash == Some(hash) {
+-                    return false;
+-                }
+-                last.hash = Some(hash);
+-                if read.iter().all(|&b| b == 0) {
++                if !last.accept_partial(read) {
+                     return false;
+                 }
+                 self.detile(read);
+@@ -1956,6 +1964,22 @@ fn staging(resource: This, copy: &crate::resource::HostTexture, first: u32) -> O
+ mod title_memory_tests {
+     use super::with_title;
+ 
++    #[test]
++    fn a_zero_sparse_read_keeps_the_digest_of_the_staged_texels() {
++        use super::{Last, digest};
++        let mut last = Last::default();
++        let missing = [0; 128];
++        let visible = [0x7a; 128];
++
++        assert!(!last.accept_partial(&missing));
++        assert_eq!(last.hash, None, "an empty first read must remain eligible for another upload");
++        assert!(last.accept_partial(&visible));
++        assert!(!last.accept_partial(&missing));
++        assert_eq!(last.hash, Some(digest(&visible)));
++        assert_ne!(last.hash, Some(digest(&missing)), "a later complete zero texture still needs detiling");
++        assert!(!last.accept_partial(&visible));
++    }
++
+     /// Title memory whose tail is reserved and not committed reads through
+     /// the copy as its bytes and then zeros, without a fault; so does
+     /// memory a page of which is taken away between two reads, and the
+-- 
+2.43.0
+

@@ -1,0 +1,172 @@
+From 7e420bb6c61eb097a3e7665bae1db8bf0cb9e452 Mon Sep 17 00:00:00 2001
+From: fxceless <36782933+fxceless@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 01:02:22 -0300
+Subject: [PATCH 48/48] Copy GPU-written texture views after a CPU upload
+
+Track GPU alias copies separately from texture uploads so a view can read the newer GPU contents. Verify the copy with D3D12 readback.
+
+Adapted from edsuuu/VI-BR-PORT 5c17c8c83b782a9c5f1bfa12fb1d2fa438c23e5b, following kesku in fxceless/victory-fork #1241.
+
+(cherry picked from commit 7993c1bcb694d1667921f1cfd7d5f63e06e99ffe)
+---
+ crates/victory-gpu/src/host.rs     | 10 ++++
+ crates/victory-gpu/src/resource.rs | 92 ++++++++++++++++++++++++++++++
+ crates/victory-gpu/src/texture.rs  |  4 +-
+ 3 files changed, 104 insertions(+), 2 deletions(-)
+
+diff --git a/crates/victory-gpu/src/host.rs b/crates/victory-gpu/src/host.rs
+index d4e6d85..48fad79 100644
+--- a/crates/victory-gpu/src/host.rs
++++ b/crates/victory-gpu/src/host.rs
+@@ -2522,6 +2522,8 @@ struct Deferred {
+     filled: std::collections::HashMap<(usize, usize), u64, std::hash::BuildHasherDefault<AddressHash>>,
+     /// Textures whose contents the list brings up to date.
+     textures: std::collections::HashSet<usize>,
++    /// Last GPU source copied into each aliased host texture in this list.
++    texture_aliases: std::collections::HashMap<usize, usize>,
+     /// Bottom-of-pipe writes, done once the list has run: address, what,
+     /// bytes.
+     writes: Vec<(usize, crate::queue::Written, usize)>,
+@@ -7737,6 +7739,14 @@ impl HostList {
+         self.deferred().textures.contains(&key)
+     }
+ 
++    /// Marks the texture used and reports whether its GPU copy has a new source.
++    pub(crate) fn alias_source_changed(&self, key: usize, view: &ID3D12Resource, source: &ID3D12Resource) -> bool {
++        let source = source.as_raw() as usize;
++        let mut deferred = self.deferred();
++        deferred.textures.insert(key);
++        deferred.texture_aliases.insert(view.as_raw() as usize, source) != Some(source)
++    }
++
+     /// Runs `work` when the list is submitted, in order with its copies.
+     /// `work` may write title memory (refreshes after it copy again).
+     pub(crate) fn defer(&self, work: impl Fn() + Send + 'static) {
+diff --git a/crates/victory-gpu/src/resource.rs b/crates/victory-gpu/src/resource.rs
+index 4c9d92a..69dfc0c 100644
+--- a/crates/victory-gpu/src/resource.rs
++++ b/crates/victory-gpu/src/resource.rs
+@@ -3970,6 +3970,98 @@ mod tests {
+         }
+     }
+ 
++    /// An earlier title-memory upload must not suppress a later alias copy
++    /// from a GPU-written probe atlas into the same sampled texture.
++    #[cfg(all(windows, feature = "diagnostics"))]
++    #[test]
++    fn alias_after_title_upload_copies_the_gpu_atlas() {
++        use std::sync::atomic::Ordering::Relaxed;
++        use windows::Win32::Graphics::Direct3D12::*;
++
++        let Some(host) = crate::host::host() else {
++            return;
++        };
++        let null = std::ptr::null();
++        let mut source = null;
++        let mut view = null;
++        let source_desc = ResourceDesc {
++            flags: 4,
++            ..texture(4, 4, 42, 1)
++        };
++        assert_eq!(
++            create_committed(
++                null, &PROPERTIES, 0, &source_desc, 0, null.cast(), &RESOURCE_IIDS[0], &mut source,
++            ),
++            S_OK
++        );
++        assert_eq!(
++            create_at_address(
++                null, resource(source).data() as u64, &texture(4, 4, 67, 1), 0,
++                null.cast(), &RESOURCE_IIDS[0], &mut view,
++            ),
++            S_OK
++        );
++        resource(view).host.placed.store(true, Relaxed);
++        assert_eq!(alias_of(view), Some(source));
++        let written = host_resource(source).unwrap();
++        let sampled = host_resource(view).unwrap();
++        let (upload, data) = host.upload_buffer(1024).unwrap();
++        let seed = host.new_list().unwrap();
++        let packed_light = 0x8c02_0100_u32;
++        // SAFETY: four rows of four texels in the upload's 1024 mapped bytes.
++        unsafe {
++            for row in 0..4 {
++                for x in 0..4 {
++                    data.add(row * 256 + x * 4).cast::<u32>().write_unaligned(packed_light);
++                }
++            }
++            let dst = D3D12_TEXTURE_COPY_LOCATION {
++                pResource: std::mem::transmute_copy(written),
++                Type: D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX,
++                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 { SubresourceIndex: 0 },
++            };
++            let src = D3D12_TEXTURE_COPY_LOCATION {
++                pResource: std::mem::transmute_copy(&upload),
++                Type: D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT,
++                Anonymous: D3D12_TEXTURE_COPY_LOCATION_0 {
++                    PlacedFootprint: D3D12_PLACED_SUBRESOURCE_FOOTPRINT {
++                        Offset: 0,
++                        Footprint: D3D12_SUBRESOURCE_FOOTPRINT {
++                            Format: written.GetDesc().Format,
++                            Width: 4,
++                            Height: 4,
++                            Depth: 1,
++                            RowPitch: 256,
++                        },
++                    },
++                },
++            };
++            crate::list::ensure_state(&seed, source, D3D12_RESOURCE_STATE_COPY_DEST.0 as u32);
++            seed.list.CopyTextureRegion(&dst, 0, 0, 0, &src, None);
++        }
++        seed.close();
++        host.execute(&[&seed]);
++
++        let list = host.new_list().unwrap();
++        crate::texture::upload(&list, view, sampled);
++        assert!(crate::texture::alias(&list, view, source));
++        crate::list::ensure_state(&list, view, D3D12_RESOURCE_STATE_COPY_SOURCE.0 as u32);
++        let (readback, rows) = crate::capture::read_back(&host.device, &list.list, sampled).unwrap();
++        list.close();
++        host.execute(&[&list]);
++        let mut mapped = std::ptr::null_mut();
++        // SAFETY: the completed copy contains at least one 32-bit texel.
++        let actual = unsafe {
++            readback.Map(0, None, Some(&mut mapped)).unwrap();
++            let texel = mapped.cast::<u8>().add(rows.Offset as usize).cast::<u32>().read_unaligned();
++            readback.Unmap(0, None);
++            texel
++        };
++        resource_release(view);
++        resource_release(source);
++        assert_eq!(actual, packed_light, "the sampled texture kept the CPU upload instead of the GPU atlas");
++    }
++
+     /// A 16-bit depth texture the title also asks unordered access for gets
+     /// a colour twin, and the host copies one into the other, both ways: a
+     /// pattern put into the twin is copied to the depth texture, the twin
+diff --git a/crates/victory-gpu/src/texture.rs b/crates/victory-gpu/src/texture.rs
+index fc039c2..b89b44d 100644
+--- a/crates/victory-gpu/src/texture.rs
++++ b/crates/victory-gpu/src/texture.rs
+@@ -280,7 +280,7 @@ pub(crate) fn alias(list: &HostList, placed: This, source: This) -> bool {
+             }
+         }
+     };
+-    let first = list.first_use(placed as usize);
++    let new_source = list.alias_source_changed(placed as usize, to, from);
+     // The source's first use in the list records nothing (its prelude
+     // brings it to the state); a use in another way since the last copy
+     // shows as a change of state.
+@@ -295,7 +295,7 @@ pub(crate) fn alias(list: &HostList, placed: This, source: This) -> bool {
+         unsafe { list.list.ResourceBarrier(&[barrier]) };
+         before
+     });
+-    if !first && before.is_none() {
++    if !new_source && before.is_none() {
+         return true;
+     }
+     card_writes(list, placed, to, None);
+-- 
+2.43.0
+

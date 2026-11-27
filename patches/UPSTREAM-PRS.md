@@ -137,3 +137,25 @@ Looked at, do not apply to either yet (worth porting when upstream settles):
 #470 failed texture detile retried, #618 LDS index clamp, #577 join EXEC
 restore, #623 v_cube denormals, #555 texture-cache staging files, #497 XMA
 audio on slow frames.
+
+## Fifth pass: black and blurry textures (2026-11-27)
+
+Both series (rdna 0049-0055, belobug 0044-0049):
+
+| Fix | What it does on screen |
+|---|---|
+| up-d15d8e7 BC7 entry 0 | BC7 blocks that pick dictionary entry 0 decoded wrong: black or garbled patches on compressed textures |
+| up-dbfb5a9 heap samplers keep point mips | anisotropic samplers from the heap blended mip levels the title asked to keep apart: a soft, smeared look on ground and walls at an angle |
+| up-037c531 comparison sampler | a comparison sampler kept the filter's min/max reduction: shadow lookups came back all-dark |
+| up-7ae1afc readback stays pending | a texture read back before its copy landed came back zeroed: black textures after a GPU write |
+| up-26aeded sparse read of holes | a read of only unmapped tiles replaced the texture's digest, so the texture was never refreshed again |
+| up-7993c1b GPU-written views copied | a view of a texture the GPU wrote after a CPU upload kept showing the old (often black) contents |
+
+RDNA only: belobug-pr287 (avatarmanz#256) a texture the card had no memory
+for kept a null, black view for good; it is now made again on the next ask.
+Belobug's a-publier has no `resource::retrying` yet, so this one waits there.
+
+Not taken: c92d5cf (publish cached mips; RDNA reworked the upload into
+`PreludeUpload`, 6 conflicts), c44e2ce (#283 on-demand levels within the VRAM
+budget, 525 lines), 79d0b2b (overlaps #287), #470 (detile retry, 360-line
+conflict). 1ad6e67 (Series S black screen) is already in RDNA as 85a663d.
