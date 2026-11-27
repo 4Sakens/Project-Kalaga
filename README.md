@@ -91,6 +91,7 @@ python -m kalaga build                     # builds the selected runtime
 python -m kalaga patches                   # list / apply picked upstream PRs (patches/rdna, belobug)
 python -m kalaga prepare                   # shaders + pipelines ahead (no stutter)
 python -m kalaga presets                   # console + switch sets per PC
+python -m kalaga session                   # run 3 presets back to back -> one fps/memory table
 python -m kalaga launch --dry-run          # exact command + env
 python -m kalaga launch                    # run the title
 python -m kalaga report --out report.json  # one JSON with everything

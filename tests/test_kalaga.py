@@ -629,3 +629,52 @@ class UpstreamPatchTests(unittest.TestCase):
             series = upstream.load(name)
             self.assertEqual(len(series.commit), 40, name)
             self.assertGreater(len(series.patches), 0, name)
+
+
+class SessionTests(unittest.TestCase):
+    """kalaga session reads the runtime's once-a-second frame line."""
+
+    @staticmethod
+    def line(fps: float, cpu: float, gpu: float, draws: int, dropped: int = 0, making: int = 0) -> str:
+        # The format string in victory-gpu/src/host.rs (VIctory-RDNA, Belobug, Vice-Tay).
+        return (
+            f"2026-11-27T20:00:00Z INFO victory_gpu::host: {fps:.1f} fps, {1000 / fps:.1f} ms/frame "
+            f"({cpu:.1f} preparing: copies 3.1 ms 12.0 MB, textures 1.2 ms 4.0 MB; {gpu:.1f} on the "
+            f"GPU; 0.4 copying back 1.0 MB), {draws} draws/frame, dropped {dropped} without a host "
+            f"pipeline ({making} being made) and 0 indirect; heap buffers 1.0 passes 0.2 ms; "
+            "texture slots written so far: 10 placed, 3 of objects; ...\n"
+        )
+
+    def test_parses_and_keeps_only_seconds_in_the_world(self) -> None:
+        from kalaga import session
+        text = "boot noise\n" + self.line(60.0, 2.0, 1.0, 40) + "".join(
+            self.line(f, 30.0, 12.0, 1800, dropped=2) for f in (20.0, 21.0, 22.0, 8.0, 21.5))
+        result = session.Result("p", session.parse(text))
+        self.assertEqual(len(result.seconds), 6)
+        st = result.stats()
+        self.assertEqual(st["world_s"], 5)
+        self.assertEqual(st["fps_median"], 21.0)
+        self.assertEqual(st["hitches"], 1)
+        self.assertEqual(st["fps_1pct"], 8.0)
+        self.assertEqual(result.bound(), "CPU")
+
+    def test_gpu_bound_and_never_in_the_world(self) -> None:
+        from kalaga import session
+        gpu = session.Result("g", session.parse(self.line(12.0, 20.0, 70.0, 2500)), 24.5, 7.6, 0)
+        none = session.Result("n", session.parse(self.line(60.0, 1.0, 1.0, 10)), None, None, 1)
+        self.assertEqual(gpu.bound(), "GPU")
+        table = session.table([gpu, none])
+        self.assertIn("24.5 GB", table)
+        self.assertIn("7.6 GB", table)
+        self.assertIn("never reached the world", table)
+
+    def test_a_run_stopped_on_schedule_is_not_a_crash(self) -> None:
+        from kalaga import session
+        self.assertEqual(session.exit_label(1, "...\n# timed out after 390s\n"), "time up")
+        self.assertEqual(session.exit_label(3221225477, "...\n"), 3221225477)
+
+    def test_default_session_presets_exist(self) -> None:
+        from kalaga import cli, presets
+        for checkout, names in cli.DEFAULT_SESSION.items():
+            for name in names:
+                self.assertEqual(presets.get(name).checkout, checkout, name)

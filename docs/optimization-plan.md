@@ -56,23 +56,33 @@ about a third of the frame and more memory; the title's ambient stand-in
 These matter only if Step 2 shows the CPU is the limit. Check: GPU usage in
 Task Manager below ~90 % while fps is low means CPU-bound.
 
-## The test session (about 45 minutes, when home)
+## The test session (one command, when home)
 
-1. `git pull`, then `python -m kalaga build` and
-   `python -m kalaga prepare --preset rx7600-belobug` (and `--preset
-   rx7600-belobug-fast`: its shader translations differ).
-2. With `victory_dir` on VIctory-RDNA: `rx7600-rdna-safe`, `rx7600-rdna`,
-   `rx7600-rdna-quality`. Then with it on Belobug: `rx7600-belobug`,
-   `-6core`, `-fast`. For each:
-   `python -m kalaga launch --preset NAME`, load the same save, stand in the
-   same spot for 2 minutes, walk for 2 minutes.
-3. Write down for each: fps from the window caption (standing / walking),
-   Task Manager peak **RAM**, peak **Dedicated GPU memory**, GPU usage %, and
-   whether textures were late, blurry or flickering. F3 shows the runtime's
-   own frame panel.
-4. Run `python -m kalaga prepare --preset <the one you keep>` once more at the end (it now has the
-   pipelines the sessions recorded).
-5. Send the table and the `logs/` folder. The presets get tuned from that.
+```powershell
+git pull
+python -m kalaga patches --runtime rdna --dir D:\VIctory-RDNA   # optional: the picked upstream PRs
+python -m kalaga build
+python -m kalaga prepare --preset rx7600-rdna
+python -m kalaga session                       # rdna-safe, rdna, rdna-quality; ~6.5 min each
+```
+
+`kalaga session` starts each preset in turn (press Enter before each), keeps
+it running for 4 minutes in the world plus 150 s to load, then stops it.
+Play the same save and the same route every run. It reads the runtime's own
+once-a-second frame line (only seconds with over 1,000 draws count, so menus
+and loading do not), samples the game's RAM and dedicated graphics memory
+every 20 s, and prints:
+
+| Preset | In world | fps median (p10-p90; 1% low) | Prep / GPU ms | Bound | Hitches <10 fps | Dropped draws | Peak RAM | Peak VRAM | Exit |
+|---|---|---|---|---|---|---|---|---|---|
+
+"Bound" says which side the frame waits on: **GPU** means picture settings
+decide the frame rate (Step 2), **CPU** means Step 3 matters. Exit "time up"
+is a normal stop; any number is a crash (the log is in the bundle). Then the
+Belobug runs: point `victory_dir` at it and `kalaga session --checkout belobug`.
+
+Send `logs\session-<time>.zip`: the table, every run's log and the tail of
+the runtime's crash log.
 
 ## Code work after the numbers (in order)
 

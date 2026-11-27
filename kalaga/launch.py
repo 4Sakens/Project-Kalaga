@@ -164,8 +164,12 @@ def compose(assessment: Assessment, scan: gamefs.GameScan, cfg: Config) -> Launc
     )
 
 
-def execute(plan: LaunchPlan, timeout: int = 0) -> int:
-    """Run the plan, teeing output to stdout and the log file."""
+def execute(plan: LaunchPlan, timeout: int = 0, on_spawn=None, echo: bool = True) -> int:
+    """Run the plan, teeing output to stdout and the log file.
+
+    ``on_spawn(pid)`` is called once the process exists (kalaga session uses
+    it to sample memory); ``echo=False`` writes only to the log.
+    """
 
     with open(plan.log_path, "w", encoding="utf-8", errors="replace") as log:
         log.write(f"# {time.strftime('%Y-%m-%d %H:%M:%S')} {plan.runtime}\n")
@@ -186,10 +190,13 @@ def execute(plan: LaunchPlan, timeout: int = 0) -> int:
             bufsize=1,
         )
         assert proc.stdout is not None
+        if on_spawn is not None:
+            on_spawn(proc.pid)
         deadline = time.time() + timeout if timeout else None
         try:
             for line in proc.stdout:
-                print(line, end="")
+                if echo:
+                    print(line, end="")
                 log.write(line)
                 log.flush()
                 if deadline and time.time() > deadline:

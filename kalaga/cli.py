@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import config, doctor, gamefs, launch, plan, presets, upstream, util
+from . import config, doctor, gamefs, launch, plan, presets, session, upstream, util
 
 EXIT_OK = 0
 EXIT_INVALID_GAME = 2
@@ -298,6 +298,107 @@ def cmd_launch(args) -> int:
     return EXIT_OK if code == 0 else EXIT_RUNTIME_FAILED
 
 
+DEFAULT_SESSION = {
+    "rdna": ["rx7600-rdna-safe", "rx7600-rdna", "rx7600-rdna-quality"],
+    "belobug": ["rx7600-belobug", "rx7600-belobug-6core", "rx7600-belobug-fast"],
+    "fork": ["rx7600-fork"],
+}
+
+
+def cmd_session(args) -> int:
+    """Run several presets back to back and write one comparison table."""
+
+    import time
+    import zipfile
+
+    cfg = _cfg(args)
+    if args.presets:
+        names = [n.strip() for n in args.presets.split(",") if n.strip()]
+    else:
+        names = DEFAULT_SESSION[args.checkout]
+    for name in names:
+        presets.get(name)  # unknown names fail before anything starts
+    directory = _ensure_game_dir(cfg)
+    scan = gamefs.scan(
+        directory,
+        expected_title_id=cfg.game.expected_title_id,
+        expected_version=cfg.game.expected_version,
+    )
+    env = doctor.detect(
+        victory_dir=cfg.runtime.victory_dir,
+        xcl_dir=cfg.runtime.xcl_dir,
+        dxc_dir=cfg.runtime.dxc_dir,
+        toolchain_bin=cfg.runtime.toolchain_bin,
+    )
+    assessment = plan.assess("victory", env, scan, cfg)
+    if not assessment.can_run:
+        print("victory is not ready:", file=sys.stderr)
+        for blocker in assessment.blockers:
+            print(f"  - {blocker.message}", file=sys.stderr)
+        return EXIT_NOT_READY
+    launch.stage_dependencies(assessment, cfg)
+    wrong = [n for n in names if presets.get(n).checkout != args.checkout]
+    if wrong:
+        print(f"note    : {', '.join(wrong)} are for another checkout than --checkout {args.checkout}; "
+              "their switches may do nothing here")
+
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    out_dir = cfg.logs_dir / f"session-{stamp}"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    run_seconds = int(args.minutes * 60) + args.load_seconds
+    print(f"session : {len(names)} runs of ~{run_seconds // 60} min each "
+          f"({args.minutes:g} min in the world + {args.load_seconds} s to load); results in {out_dir}")
+    print("          Play the same stretch every run (same save, same route), so the runs compare.")
+    results: list[session.Result] = []
+    for i, name in enumerate(names, 1):
+        cfg.launch.preset = name
+        launch_plan = launch.compose(assessment, scan, cfg)
+        if not args.no_pause:
+            try:
+                input(f"\n[{i}/{len(names)}] {name}: press Enter to start (Ctrl+C to stop the session) ")
+            except (EOFError, KeyboardInterrupt):
+                print("\nstopped")
+                break
+        print(f"[{i}/{len(names)}] {name}: running {run_seconds} s, log {launch_plan.log_path}")
+        sampler = session.MemorySampler()
+        code = launch.execute(launch_plan, timeout=run_seconds, on_spawn=sampler.start, echo=False)
+        ram, vram = sampler.stop()
+        text = launch_plan.log_path.read_text(encoding="utf-8", errors="replace")
+        result = session.Result(name, session.parse(text), ram, vram,
+                                session.exit_label(code, text), str(launch_plan.log_path))
+        results.append(result)
+        st = result.stats()
+        if st.get("world_s"):
+            print(f"          {st['fps_median']:.1f} fps median over {st['world_s']} s in the world, "
+                  f"{result.bound()}-bound, {st['hitches']} hitches")
+        else:
+            print(f"          never reached the world (exit {result.exit_code}); see the log")
+    if not results:
+        return EXIT_RUNTIME_FAILED
+
+    summary = out_dir / "summary.md"
+    lines = [f"# Kalaga session {stamp}", "", session.table(results), "",
+             "fps from the runtime's once-a-second frame line, seconds with over 1,000 draws only. "
+             "Bound: which of preparing (CPU) and waiting on the GPU is 20 % longer. "
+             "Peak RAM: the game's private bytes; peak VRAM: its dedicated GPU memory "
+             "(sampled every 20 s, Windows only).", ""]
+    for r in results:
+        lines.append(f"- `{r.preset}`: {presets.get(r.preset).summary} — log `{r.log}`")
+    summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    bundle = out_dir.with_suffix(".zip")
+    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as z:
+        z.write(summary, f"session-{stamp}/summary.md")
+        for r in results:
+            z.write(r.log, f"session-{stamp}/{Path(r.log).name}")
+        crashes = launch.crash_log(env, cfg)
+        if crashes.is_file():
+            z.writestr(f"session-{stamp}/crashes-tail.log", launch.tail(crashes, 200))
+    print()
+    print(session.table(results))
+    print(f"\nsummary : {summary}\nsend    : {bundle}")
+    return EXIT_OK
+
+
 def cmd_prepare(args) -> int:
     """Translate every shader and build every recorded pipeline ahead of a run.
 
@@ -528,6 +629,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--strict", action="store_true", help="exit non-zero if any patch did not apply")
     p.add_argument("--summary", help="append the markdown report to this file (CI job summary)")
     p.set_defaults(func=cmd_patches)
+
+    p = sub.add_parser("session", parents=[common],
+                       help="run several presets back to back and compare them in one table")
+    p.add_argument("--checkout", choices=sorted(DEFAULT_SESSION), default="rdna",
+                   help="which runtime [runtime] victory_dir holds (picks the default presets)")
+    p.add_argument("--presets", help="comma-separated presets (default: the checkout's three)")
+    p.add_argument("--minutes", type=float, default=4.0, help="minutes in the world per run")
+    p.add_argument("--load-seconds", type=int, default=150, help="added per run for loading (default 150)")
+    p.add_argument("--no-pause", action="store_true", help="do not wait for Enter between runs")
+    p.set_defaults(func=cmd_session)
 
     p = sub.add_parser("presets", parents=[common], help="list the launch presets")
     p.set_defaults(func=cmd_presets)
