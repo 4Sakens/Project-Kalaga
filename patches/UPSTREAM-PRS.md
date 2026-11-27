@@ -212,11 +212,12 @@ The CI skips its legs with a warning until it comes back; the series stays
 as it was (0001-0053) and is not extended, since nothing new could be built
 or tested. A Belobug checkout made before today still works with it.
 
-From the first `kalaga candidates` run (rdna 0061-0063, all applied cleanly
-on the patched series):
+From the first `kalaga candidates` run (rdna 0061-0062):
 
 | Fix | What it does here |
 |---|---|
 | fxceless-pr1442 pipeline library loads | loads of different pipelines shared 64 locks by name hash, so two unrelated loads could wait seconds on each other: stutter while pipelines come in. Now only the same name waits |
 | fxceless-pr1491 audio DSP convolutions | TVs, phone calls and reverb go through the console's audio DSP, whose outputs were zeros: those were silent and reverb dry. Mono 1024-frame convolutions are computed now (`VICTORY_DSP_CONVOLVE=0` off, `VICTORY_DSP_GAIN`) |
-| marvisak-pr2254 v_mad_i64_i32 | a negative literal addend was zero-extended: wrong 64-bit results in shaders |
+
+Marvisak #2254 (v_mad_i64_i32 literal sign) applied as text, but VIctory-RDNA
+does not translate v_mad_i64_i32 at all, so its test failed in CI: dropped.
