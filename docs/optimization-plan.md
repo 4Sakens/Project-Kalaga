@@ -1,6 +1,6 @@
 # Optimization plan: faster without losing picture quality (2026-11-26)
 
-For the Belobug runtime on this PC (Ryzen 5 5600X, 32 GiB, RX 7600 8 GB).
+For the VIctory-RDNA and Belobug runtimes (one code family) on this PC (Ryzen 5 5600X, 32 GiB, RX 7600 8 GB).
 Written away from the machine. Nothing here is measured on it yet. Upstream
 numbers are from Belobug's `docs/findings.md` (i9-12900K, 64 GB, 7900 XTX).
 
@@ -25,6 +25,7 @@ quality/speed point with real numbers.
 | What | How | Why |
 |---|---|---|
 | No shader/pipeline stutter | `python -m kalaga prepare --preset NAME` after each build, and again after the first play session, for each preset you play (translations are cached per switch set: `-fast` turns on `VICTORY_PORT_CBV`, which changes them) | Upstream lost 270-660 s of a session to frames over 200 ms while pipelines were made. `prepare` runs `victory shaders` (translate everything) and `victory warm` (build every pipeline recorded by `VICTORY_PIPELINE_BOOK=1`, which the presets now set) |
+| No out-of-memory crash on the 8 GB card | `VICTORY_TEXTURE_BUDGET_MB` 5120 / 4608 in every RDNA/Belobug preset | Series X ran out of graphics memory in the first cutscene on 8 GB cards in i95's runs. Below the cap textures load as before; above it, new ones wait instead of crashing the driver |
 | Idle memory released under pressure | `VICTORY_WINDOW_BUDGET_MB=1536` (in all Belobug presets) | Window copies grow 2.8 → 4.3 GB in eight minutes. The cap applies only when Windows reports memory pressure, and a dropped copy is re-made on its next read |
 | Commit headroom | Page file system-managed on the fastest SSD, 40+ GB free; close the browser/Discord | Belobug's memory bands use commit limit (RAM + page file). More headroom = fewer forced releases and no out-of-commit crash (error 1455) |
 | Driver | Latest Adrenalin; run from a normal (non-admin) window | Admin runs put the driver shader cache elsewhere, so the warm cache is missed |
@@ -60,8 +61,9 @@ Task Manager below ~90 % while fps is low means CPU-bound.
 1. `git pull`, then `python -m kalaga build` and
    `python -m kalaga prepare --preset rx7600-belobug` (and `--preset
    rx7600-belobug-fast`: its shader translations differ).
-2. For each preset in this order: `-safe`, `rx7600-belobug`, `-quality`,
-   `-6core`, `-fast`:
+2. With `victory_dir` on VIctory-RDNA: `rx7600-rdna-safe`, `rx7600-rdna`,
+   `rx7600-rdna-quality`. Then with it on Belobug: `rx7600-belobug`,
+   `-6core`, `-fast`. For each:
    `python -m kalaga launch --preset NAME`, load the same save, stand in the
    same spot for 2 minutes, walk for 2 minutes.
 3. Write down for each: fps from the window caption (standing / walking),

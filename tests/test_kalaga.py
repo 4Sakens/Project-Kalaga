@@ -421,6 +421,24 @@ class LaunchTests(TempCase):
             self.assertNotIn("VICTORY_PIPELINE_WORKERS", env, name)
             self.assertNotIn("VICTORY_VIEW_THREADS", env, name)
 
+    def test_8gb_presets_cap_textures_but_not_card_buffers(self) -> None:
+        from kalaga import presets
+        for name, preset in presets.PRESETS.items():
+            env = presets.environment(preset)
+            if preset.checkout in ("rdna", "belobug"):
+                # The family already defaults card buffers to 512 MiB on 8 GB.
+                self.assertNotIn("VICTORY_CARD_BUFFERS_MB", env, name)
+                want = "4608" if preset.console == "series-x" else "5120"
+                self.assertEqual(env.get("VICTORY_TEXTURE_BUDGET_MB"), want, name)
+
+    def test_rdna_preset_carries_its_fast_set(self) -> None:
+        cfg, scan, assessment = self._setup()
+        cfg.launch.preset = "rx7600-rdna"
+        result = launch.compose(assessment, scan, cfg)
+        self.assertEqual(result.argv[result.argv.index("--console") + 1], "series-s")
+        self.assertEqual(result.env["VICTORY_PORT_BUFFERS"], "1")
+        self.assertEqual(result.env["VICTORY_INPLACE"], "2")
+
     def test_unknown_preset_is_an_error(self) -> None:
         cfg, scan, assessment = self._setup()
         cfg.launch.preset = "rx9999"

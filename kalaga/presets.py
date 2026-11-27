@@ -20,7 +20,7 @@ from .config import REPO_ROOT
 class Preset:
     name: str
     summary: str
-    # Which VIctory checkout the switches belong to ("belobug" or "fork").
+    # Which VIctory checkout the switches belong to ("rdna", "belobug" or "fork").
     # Switches one fork reads are ignored by another, so a mismatch is
     # harmless but does nothing.
     checkout: str
@@ -100,7 +100,58 @@ _SERIES_X_1080P = {
     "VICTORY_RENDER_SCALE": "1.0",
 }
 
+# 8 GB card: a hard cap on title textures. On 8 GB cards Series X runs out
+# of graphics memory in the first cutscene (i95's RTX 4060 runs, for Vice-Tay
+# and VIctory-7900XTX, both this code family); every 8 GB setting on the
+# board caps textures at 4-5 GB. The cap replaces the 90 % room test and does
+# not reserve anything: below it, textures load as before.
+# VICTORY_CARD_BUFFERS_MB is left alone on purpose: on budgets <= 12 GiB this
+# family already defaults it to 512 MiB, and the board's 1024 would double it.
+_EIGHT_GB_SERIES_S = {"VICTORY_TEXTURE_BUDGET_MB": "5120"}
+# Series X's bigger render targets need more of the card.
+_EIGHT_GB_SERIES_X = {"VICTORY_TEXTURE_BUDGET_MB": "4608"}
+
 _BELOBUG_COMMON = {**_BELOBUG_BASE, **_THIRTY_TWO_GB, **_PIPELINE_BOOK}
+
+# XaviFortes/VIctory-RDNA: VIctory-7900XTX tuned for RDNA3 (the RX 7600's
+# architecture). scripts/rdna-preset.json "base" and "fast", its default.
+_RDNA_BASE = {
+    "VICTORY_TEXTURE_NO_WAIT": "1",
+    "VICTORY_RELAY": "2",
+    "VICTORY_WIDE_BACK": "1",
+    "VICTORY_CARD_REHASH_RUNS": "1",
+    "VICTORY_JOIN_COPIES": "1",
+    "VICTORY_INDIRECT_WINDOW": "1",
+    "VICTORY_RELAY_COPY": "1",
+    "VICTORY_CARD_STEPS": "2",
+    "VICTORY_INDIRECT_BATCH": "2",
+    "VICTORY_MAP_THREADS": "1",
+    "VICTORY_TITLE_PRIORITIES": "0",
+    "VICTORY_CARD_AWAKE": "1",
+    "VICTORY_SHOW_AFTER": "1",
+    "VICTORY_AMBIENT": "0.8",
+    "VICTORY_CARD_BUFFERS_MIN_MB": "1",
+}
+_RDNA_FAST = {
+    "VICTORY_THIN": "1",
+    "VICTORY_JOIN_PARTS": "8",
+    "VICTORY_UPLOAD_AHEAD": "1",
+    "VICTORY_PORT_CONSTANTS": "1",
+    "VICTORY_PORT_DESCRIPTORS": "1",
+    "VICTORY_PORT_CBV": "1",
+    "VICTORY_PORT_GUARD": "1",
+    "VICTORY_PORT_JOURNAL": "1",
+    "VICTORY_PORT_BUFFERS": "1",
+    "VICTORY_INPLACE": "2",
+    "VICTORY_ASK_SPREAD": "1",
+    "VICTORY_RESIDENCY": "1",
+    "VICTORY_SYNC_FINE": "1",
+}
+_RDNA_SAFE = {
+    "VICTORY_UNDER_WIDE": "0",
+    "VICTORY_LAND_ECHO": "0",
+}
+_RDNA_COMMON = {**_RDNA_BASE, **_THIRTY_TWO_GB, **_PIPELINE_BOOK}
 
 # The fxceless/victory-fork switches measured in docs/pc-test.md (run 3),
 # exactly: this preset is the known-good fallback (Series X, 0 removals).
@@ -120,39 +171,60 @@ PRESETS: dict[str, Preset] = {
     p.name: p
     for p in (
         Preset(
+            name="rx7600-rdna",
+            summary="VIctory-RDNA (RDNA3-tuned), Series S, its base+fast set, 5 GB texture cap (recommended start)",
+            checkout="rdna",
+            console="series-s",
+            env={**_RDNA_COMMON, **_RDNA_FAST, **_EIGHT_GB_SERIES_S},
+        ),
+        Preset(
+            name="rx7600-rdna-quality",
+            summary="VIctory-RDNA, Series X drawn at native 1080p: sharpest picture, most VRAM",
+            checkout="rdna",
+            console="series-x",
+            env={**_RDNA_COMMON, **_RDNA_FAST, **_SERIES_X_1080P, **_EIGHT_GB_SERIES_X},
+        ),
+        Preset(
+            name="rx7600-rdna-safe",
+            summary="VIctory-RDNA, Series S, its base+safe set: try first when something breaks",
+            checkout="rdna",
+            console="series-s",
+            env={**_RDNA_COMMON, **_RDNA_SAFE, **_EIGHT_GB_SERIES_S},
+        ),
+        Preset(
             name="rx7600-belobug",
-            summary="Belobug runtime, Series S, the settings of Belobug's play.ps1 (recommended start)",
+            summary="Belobug runtime, Series S, the settings of Belobug's play.ps1, 5 GB texture cap",
             checkout="belobug",
             console="series-s",
-            env={**_BELOBUG_COMMON, **_BELOBUG_FAST_WAYS},
+            env={**_BELOBUG_COMMON, **_BELOBUG_FAST_WAYS, **_EIGHT_GB_SERIES_S},
         ),
         Preset(
             name="rx7600-belobug-quality",
             summary="Series X profile drawn at native 1080p: sharpest picture; needs the most VRAM",
             checkout="belobug",
             console="series-x",
-            env={**_BELOBUG_COMMON, **_BELOBUG_FAST_WAYS, **_SERIES_X_1080P},
+            env={**_BELOBUG_COMMON, **_BELOBUG_FAST_WAYS, **_SERIES_X_1080P, **_EIGHT_GB_SERIES_X},
         ),
         Preset(
             name="rx7600-belobug-6core",
             summary="rx7600-belobug with worker pools sized for 6 cores / 12 threads (experiment)",
             checkout="belobug",
             console="series-s",
-            env={**_BELOBUG_COMMON, **_BELOBUG_FAST_WAYS, **_SIX_CORES},
+            env={**_BELOBUG_COMMON, **_BELOBUG_FAST_WAYS, **_SIX_CORES, **_EIGHT_GB_SERIES_S},
         ),
         Preset(
             name="rx7600-belobug-fast",
             summary="rx7600-belobug plus the five renderer patches (VICTORY_PORT_*)",
             checkout="belobug",
             console="series-s",
-            env={**_BELOBUG_COMMON, **_BELOBUG_FAST_WAYS, **_BELOBUG_PORT},
+            env={**_BELOBUG_COMMON, **_BELOBUG_FAST_WAYS, **_BELOBUG_PORT, **_EIGHT_GB_SERIES_S},
         ),
         Preset(
             name="rx7600-belobug-safe",
             summary="Belobug runtime, Series S, play.ps1 -Safe: try first when something breaks",
             checkout="belobug",
             console="series-s",
-            env={**_BELOBUG_COMMON, **_BELOBUG_SAFE_WAYS},
+            env={**_BELOBUG_COMMON, **_BELOBUG_SAFE_WAYS, **_EIGHT_GB_SERIES_S},
         ),
         Preset(
             name="rx7600-fork",

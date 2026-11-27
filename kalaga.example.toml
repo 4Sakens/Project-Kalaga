@@ -36,7 +36,7 @@ dxc_dir = 'D:\projectz-deps\dxc'
 
 [launch]
 # Named console + switch set (`python -m kalaga presets`; docs/hardware-pick.md).
-# For the Belobug runtime on an RX 7600: 'rx7600-belobug'.
+# On an RX 7600: 'rx7600-rdna' (VIctory-RDNA checkout) or 'rx7600-belobug'.
 preset = ''
 console = ''              # series-x | series-s; empty = the preset's, else series-x
 warp = false              # true = D3D12 software adapter (diagnostics only)

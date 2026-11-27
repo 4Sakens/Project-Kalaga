@@ -72,9 +72,10 @@ evidence and a diagnostic report.
 
 ## Which runtime for this PC
 
-For the RX 7600 / 32 GiB machine, the pick is **Belobug/VIctory-Belobug-AMD**
-(the fastest public AMD code, ~22 fps upstream on a 7900 XTX vs ~4 fps on our
-fork base) with the Series S profile. `python -m kalaga presets` lists the
+For the RX 7600 / 32 GiB machine, the pick is **XaviFortes/VIctory-RDNA**
+(VIctory-7900XTX tuned for RDNA3: 23.1 fps median upstream vs ~4 fps on our
+fork base), with **Belobug/VIctory-Belobug-AMD** as the second choice, both
+with the Series S profile and an 8 GB texture cap. `python -m kalaga presets` lists the
 launch presets; why and how to set it up: [docs/hardware-pick.md](docs/hardware-pick.md).
 What to optimize next without losing picture quality, and the test session to
 run: [docs/optimization-plan.md](docs/optimization-plan.md).

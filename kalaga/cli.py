@@ -343,9 +343,25 @@ def cmd_prepare(args) -> int:
     if scan.directory:
         run_env.setdefault("VICTORY_GAME_DIR", str(scan.directory))
     exe = str(assessment.executable)
+    # The files that hold the title's shaders, as every launcher of this code
+    # family passes them. With no paths `victory shaders` walks the whole
+    # game folder (200+ GiB of archives).
+    shader_sources: list[str] = []
+    if scan.directory:
+        game = Path(scan.directory)
+        for name in ("shaders.rpf", None, "XboxBvhBuilder.dll", "amd_fidelityfx_upscaler_xbox.dll"):
+            if name is None:
+                if scan.entry_points:
+                    shader_sources.append(str(scan.entry_points[0]))
+                continue
+            if (game / name).is_file():
+                shader_sources.append(str(game / name))
     steps = []
     if not args.skip_shaders:
-        steps.append(("shaders", [exe, "shaders"]))
+        if shader_sources:
+            steps.append(("shaders", [exe, "shaders", *shader_sources]))
+        else:
+            print("note    : no shader sources found in the game folder; skipping `shaders`")
     if not args.skip_warm:
         steps.append(("warm", [exe, "warm"]))
     cfg.logs_dir.mkdir(parents=True, exist_ok=True)

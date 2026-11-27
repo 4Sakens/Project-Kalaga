@@ -6,7 +6,26 @@ Windows 11. Source list: the PortWatch tracker
 clones of the public repositories below. Nothing here was run on this
 machine yet; every number is the owner's or PortWatch's.
 
-## Pick: Belobug/VIctory-Belobug-AMD
+## Update (later on 2026-11-26): VIctory-RDNA first, Belobug second
+
+A second survey, of i95's standings and launch specs
+(`DesignWithTommy/i95`, 31 runtimes, its own runs on an RTX 4060 8 GB /
+16 GB PC), changed three things:
+
+| Finding | Effect here |
+|---|---|
+| **XaviFortes/VIctory-RDNA** (`main` @ `2c5a395`, GPL-3.0): VIctory-7900XTX tuned for **RDNA3**, the RX 7600's architecture. 23.1 fps median at Series X 4K on an RX 7900 XT, ~40 min by hand; submit-thread prep 29.5 ms (vs ~48 upstream); a long-session slowdown (10 → 42 ms creep) removed; renderer patches on by default | New first pick: same code family as Belobug (41 files differ), same layout, same switches, but measured on RDNA3 and longer. Presets `rx7600-rdna`, `-quality`, `-safe` |
+| On 8 GB cards **Series X runs out of graphics memory in the first cutscene** (i95: Vice-Tay and VIctory-7900XTX, both this family) | Every Belobug/RDNA preset now has a hard texture cap: `VICTORY_TEXTURE_BUDGET_MB` 5120 (Series S) / 4608 (Series X) |
+| **TaynanGT/Vice-Tay**, the tracker leader (21.1-21.6 fps median, 30-70 min played, RTX 4090): an independent RTX 4060 8 GB run reached ~16 fps with Series S and low budgets, "rough picture" | Same family; tuned on NVIDIA, its AMD settings are Belobug's. Not added: nothing it does for AMD that RDNA/Belobug lack. Its 23-27 GB memory on Series S is the best evidence that Series S fits 32 GiB |
+
+Not taken: `VICTORY_CARD_BUFFERS_MB=1024` from the board's 8 GB settings
+(this family already defaults to 512 MiB on cards with 12 GiB or less, so
+1024 would double it); `VICTORY_TEXTURE_MIP_BIAS` (Kitty6 only, lowers
+texture detail). Watch: Kelvaroq's unified memory layer (shares the title's
+graphics memory with the card instead of copying it every frame) is not
+public yet; if it lands it attacks the cost every runtime here pays.
+
+## First pick of the day: Belobug/VIctory-Belobug-AMD
 
 | | |
 |---|---|
@@ -35,6 +54,9 @@ trying.
 
 | Preset | Runtime checkout | What it sets |
 |---|---|---|
+| `rx7600-rdna` | VIctory-RDNA | Series S; its `rdna-preset.json` base + fast (renderer patches, in-place buffers, residency); 5 GB texture cap (**recommended start**) |
+| `rx7600-rdna-quality` | VIctory-RDNA | Series X at native 1080p; 4.5 GB texture cap |
+| `rx7600-rdna-safe` | VIctory-RDNA | Series S; base + safe |
 | `rx7600-belobug` | Belobug | Series S; the switches Belobug's `scripts\play.ps1` uses |
 | `rx7600-belobug-quality` | Belobug | Series X profile drawn at native 1080p (`VICTORY_OUTPUT=1920x1080` + `VICTORY_RENDER_SCALE=1.0`; without the scale the title draws 1280x720 and upscales): sharpest picture, most VRAM |
 | `rx7600-belobug-6core` | Belobug | `rx7600-belobug` + list and compare pools sized for 12 threads (experiment) |
@@ -53,6 +75,9 @@ want on top in `[launch.extra_env]`. What to test and in which order:
 ## Setting it up
 
 ```powershell
+git clone https://github.com/XaviFortes/VIctory-RDNA D:\VIctory-RDNA
+copy D:\VIctory-RDNA\victory.example.toml D:\VIctory-RDNA\victory.toml       # set paths
+# and, as the second choice:
 git clone https://github.com/Belobug/VIctory-Belobug-AMD D:\VIctory-Belobug
 copy D:\VIctory-Belobug\victory.example.toml D:\VIctory-Belobug\victory.toml   # set paths
 ```
@@ -61,10 +86,10 @@ In `kalaga.toml`:
 
 ```toml
 [runtime]
-victory_dir = 'D:\VIctory-Belobug'   # keep D:\VIctory for the old fork
+victory_dir = 'D:\VIctory-RDNA'   # or D:\VIctory-Belobug; D:\VIctory is the old fork
 
 [launch]
-preset = 'rx7600-belobug'
+preset = 'rx7600-rdna'   # a preset matching the checkout: rx7600-belobug for Belobug
 ```
 
 Then `python -m kalaga build`, `python -m kalaga prepare` (same switches as
