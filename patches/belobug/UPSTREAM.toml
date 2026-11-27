@@ -1,0 +1,4 @@
+# The tree patches/belobug/*.patch were picked against (patches/UPSTREAM-PRS.md).
+repo = "https://github.com/Belobug/VIctory-Belobug-AMD"
+branch = "a-publier"
+commit = "4eb6cfdf9e61cb112f1f811344ec0dd309eddd6c"

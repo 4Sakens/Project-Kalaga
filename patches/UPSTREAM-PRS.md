@@ -5,21 +5,22 @@ Belobug/VIctory-Belobug-AMD (~250 open) and TaynanGT/Vice-Tay (17 open),
 the two busiest trees of this code family. VIctory-RDNA has none of its own.
 Each file is the PR's own commit, author and message kept.
 
-**Status: each series applies cleanly with `git am`, in order, to
-VIctory-RDNA `2c5a395` and Belobug `a-publier` @ `4eb6cfd`. None of it has
-been compiled or run** (the Windows toolchain is not available where they
-were picked). Build, then play `-safe` first.
+**Status: each series applies cleanly to the base pinned in its
+`UPSTREAM.toml`.** The **Runtimes** workflow (`.github/workflows/runtimes.yml`,
+Actions tab) builds `victory.exe` and runs upstream's tests with the series on
+a Windows machine on every change here and daily; it has not been played yet.
+Build, then play `-safe` first.
 
 ```powershell
-cd D:\VIctory-RDNA            # or D:\VIctory-Belobug with patches\belobug
+cd D:\VIctory-RDNA            # or D:\VIctory-Belobug with --runtime belobug
 git switch -c kalaga-prs
-git am --3way D:\Project-Kalaga\patches\rdna\*.patch
+python -m kalaga patches --runtime rdna --dir D:\VIctory-RDNA   # skips and reports any that no longer apply
 python -m kalaga build
 python -m kalaga prepare --preset rx7600-rdna-safe   # 0001-0004 change shader translation
 ```
 
-If a patch stops applying after `git pull`, `git am --abort` and drop that
-file; the series is independent past 0002 (0002 is #442 with its test merged
+`kalaga patches` backs out a patch that no longer applies (after a
+`git pull`, say) and applies the rest; the series is independent past 0002 (0002 is #442 with its test merged
 next to #363's, which both add at the same place).
 
 ## What is in it

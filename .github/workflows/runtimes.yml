@@ -1,0 +1,117 @@
+# Build and test VIctory-RDNA and Belobug with Kalaga's picked upstream PRs
+# (patches/rdna, patches/belobug) on a Windows machine, so a patch that
+# breaks the build or a test is found before anyone sits down to play.
+#
+# Per runtime, three legs:
+#   patched  - the pinned base (patches/<runtime>/UPSTREAM.toml) + the series.
+#              Must pass.
+#   bare     - the pinned base alone. Tells a test our patches broke from one
+#              that fails on a hosted runner anyway.
+#   latest   - upstream's newest commit + the series: early warning that
+#              upstream moved under a patch. Allowed to fail.
+# No GPU here: upstream's GPU tests skip without one, as in upstream's own CI.
+name: Runtimes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "patches/rdna/**"
+      - "patches/belobug/**"
+      - "kalaga/upstream.py"
+      - ".github/workflows/runtimes.yml"
+  schedule:
+    - cron: "17 9 * * *" # daily, ~4 am New York: catches upstream drift
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runtimes-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  kalaga-tests:
+    name: Kalaga tests
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest discover -s tests -v
+
+  runtime:
+    name: ${{ matrix.runtime }} (${{ matrix.leg }})
+    runs-on: windows-latest
+    timeout-minutes: 120
+    continue-on-error: ${{ matrix.leg != 'patched' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime: [rdna, belobug]
+        leg: [patched, bare, latest]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: kalaga
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch the runtime
+        shell: pwsh
+        run: |
+          $meta = Get-Content "kalaga/patches/${{ matrix.runtime }}/UPSTREAM.toml" -Raw
+          $repo = [regex]::Match($meta, 'repo\s*=\s*"([^"]+)"').Groups[1].Value
+          $branch = [regex]::Match($meta, 'branch\s*=\s*"([^"]+)"').Groups[1].Value
+          $commit = [regex]::Match($meta, 'commit\s*=\s*"([^"]+)"').Groups[1].Value
+          $ref = if ('${{ matrix.leg }}' -eq 'latest') { $branch } else { $commit }
+          git init -q runtime
+          # The patches carry LF line ends; Windows' default autocrlf would
+          # make every one of them fail to apply.
+          git -C runtime config core.autocrlf false
+          git -C runtime remote add origin $repo
+          git -C runtime fetch -q --depth 1 origin $ref
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          git -C runtime checkout -q FETCH_HEAD
+          $head = git -C runtime rev-parse HEAD
+          "Base: $repo @ $head ($('${{ matrix.leg }}'))" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+
+      - name: Apply the picked PRs
+        if: matrix.leg != 'bare'
+        shell: pwsh
+        working-directory: kalaga
+        run: |
+          $extra = @()
+          if ('${{ matrix.leg }}' -eq 'patched') { $extra += '--strict' }
+          python -m kalaga patches --runtime ${{ matrix.runtime }} --dir ../runtime --summary $env:GITHUB_STEP_SUMMARY @extra
+          exit $LASTEXITCODE
+
+      # The version and components pinned in the runtime's rust-toolchain.toml.
+      - name: Rust toolchain
+        working-directory: runtime
+        run: rustup toolchain install
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: runtime
+          key: ${{ matrix.runtime }}-${{ matrix.leg }}
+
+      - name: Build victory.exe (release, as Kalaga builds it)
+        working-directory: runtime
+        run: cargo build --locked --release -p victory
+
+      - name: Tests (default features)
+        working-directory: runtime
+        run: cargo test --workspace --locked
+
+      - name: Clippy (warnings shown, not fatal)
+        if: always()
+        working-directory: runtime
+        run: cargo clippy --workspace --all-targets --locked

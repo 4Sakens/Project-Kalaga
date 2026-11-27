@@ -564,3 +564,68 @@ class RealDumpTests(unittest.TestCase):
 
 if __name__ == "__main__":  # pragma: no cover
     unittest.main()
+
+
+class UpstreamPatchTests(unittest.TestCase):
+    """kalaga patches: one bad patch is backed out, the rest still go in."""
+
+    def setUp(self) -> None:
+        import shutil
+        import subprocess
+        if shutil.which("git") is None:
+            self.skipTest("git not installed")
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.repo = self.root / "runtime"
+        self.repo.mkdir()
+        self.git = lambda *a: subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@t", *a],
+            cwd=self.repo, check=True, capture_output=True, text=True,
+        ).stdout
+        self.git("init", "-q")
+        self.git("config", "core.autocrlf", "false")
+        (self.repo / "a.txt").write_text("one\ntwo\nthree\n", encoding="utf-8", newline="\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "base")
+        self.base = self.git("rev-parse", "HEAD").strip()
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _patch(self, name: str, old: str, new: str, folder: Path) -> None:
+        (self.repo / "a.txt").write_text(old.replace("two", new), encoding="utf-8", newline="\n")
+        self.git("commit", "-qam", name)
+        (folder / f"{name}.patch").write_text(
+            self.git("format-patch", "--stdout", "-1"), encoding="utf-8", newline="\n")
+        self.git("reset", "-q", "--hard", self.base)
+
+    def test_a_patch_that_does_not_apply_is_skipped_and_reported(self) -> None:
+        from kalaga import upstream
+        series = self.root / "patches" / "demo"
+        series.mkdir(parents=True)
+        (series / "UPSTREAM.toml").write_text(
+            f'repo = "x"\nbranch = "main"\ncommit = "{self.base}"\n', encoding="utf-8")
+        text = "one\ntwo\nthree\n"
+        self._patch("0001-good", text, "TWO", series)
+        # 0002 expects a line that 0001 already changed differently: conflicts.
+        self._patch("0002-clash", text, "deux", series)
+        (self.repo / "b.txt").write_text("b\n", encoding="utf-8", newline="\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "0003-other")
+        (series / "0003-other.patch").write_text(
+            self.git("format-patch", "--stdout", "-1"), encoding="utf-8", newline="\n")
+        self.git("reset", "-q", "--hard", self.base)
+
+        report = upstream.apply(upstream.load("demo", root=self.root / "patches"), self.repo)
+        self.assertEqual([o.applied for o in report.outcomes], [True, False, True])
+        self.assertEqual((self.repo / "a.txt").read_text(encoding="utf-8"), "one\nTWO\nthree\n")
+        self.assertTrue((self.repo / "b.txt").is_file())
+        self.assertEqual(self.git("status", "--porcelain").strip(), "")
+        self.assertIn("did not apply", report.markdown())
+
+    def test_shipped_series_have_a_pinned_base(self) -> None:
+        from kalaga import upstream
+        for name in ("rdna", "belobug"):
+            series = upstream.load(name)
+            self.assertEqual(len(series.commit), 40, name)
+            self.assertGreater(len(series.patches), 0, name)

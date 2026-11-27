@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-from . import config, doctor, gamefs, launch, plan, presets, util
+from . import config, doctor, gamefs, launch, plan, presets, upstream, util
 
 EXIT_OK = 0
 EXIT_INVALID_GAME = 2
@@ -384,6 +384,37 @@ def cmd_prepare(args) -> int:
     return EXIT_OK
 
 
+def cmd_patches(args) -> int:
+    """Apply a picked upstream-PR series (patches/<runtime>/) to a checkout."""
+
+    if not args.runtime:
+        for name in upstream.runtimes():
+            u = upstream.load(name)
+            print(f"{name:10} {len(u.patches):3} patches  base {u.repo} {u.branch} @ {u.commit[:12]}")
+        print("\nApply one: kalaga patches --runtime NAME [--dir CHECKOUT]")
+        return EXIT_OK
+    series = upstream.load(args.runtime)
+    directory = args.dir or _cfg(args).runtime.victory_dir
+    if not directory:
+        print("give --dir or set [runtime] victory_dir", file=sys.stderr)
+        return EXIT_NOT_READY
+    try:
+        report = upstream.apply(series, Path(directory))
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_NOT_READY
+    text = report.markdown()
+    print(text)
+    if not report.base.startswith(series.commit[:12]):
+        print(f"\nnote: picked against {series.commit[:12]}; this checkout was at {report.base[:12]}")
+    if args.summary:
+        with open(args.summary, "a", encoding="utf-8") as fh:
+            fh.write(text + "\n\n")
+    if report.failed and args.strict:
+        return EXIT_RUNTIME_FAILED
+    return EXIT_OK
+
+
 def cmd_presets(args) -> int:
     if args.json:
         payload = [
@@ -489,6 +520,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skip-warm", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_prepare)
+
+    p = sub.add_parser("patches", parents=[common],
+                       help="list or apply the picked upstream-PR series (patches/rdna, patches/belobug)")
+    p.add_argument("--runtime", choices=upstream.runtimes() or None)
+    p.add_argument("--dir", help="the runtime checkout (default: [runtime] victory_dir)")
+    p.add_argument("--strict", action="store_true", help="exit non-zero if any patch did not apply")
+    p.add_argument("--summary", help="append the markdown report to this file (CI job summary)")
+    p.set_defaults(func=cmd_patches)
 
     p = sub.add_parser("presets", parents=[common], help="list the launch presets")
     p.set_defaults(func=cmd_presets)

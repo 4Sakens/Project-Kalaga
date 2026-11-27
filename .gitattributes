@@ -1,0 +1,2 @@
+# Patches must reach git am byte for byte: no CRLF conversion on Windows.
+*.patch -text
