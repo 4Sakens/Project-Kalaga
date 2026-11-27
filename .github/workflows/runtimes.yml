@@ -18,6 +18,7 @@ on:
     paths:
       - "patches/rdna/**"
       - "patches/belobug/**"
+      - "patches/*/KNOWN-FAILING.txt"
       - "kalaga/upstream.py"
       - ".github/workflows/runtimes.yml"
   schedule:
@@ -109,7 +110,19 @@ jobs:
 
       - name: Tests (default features)
         working-directory: runtime
-        run: cargo test --workspace --locked
+        shell: pwsh
+        run: |
+          # Upstream tests known to fail on a GPU-less runner, patched or not.
+          $skip = @()
+          $known = "../kalaga/patches/${{ matrix.runtime }}/KNOWN-FAILING.txt"
+          if (Test-Path $known) {
+            Get-Content $known | Where-Object { $_ -and -not $_.StartsWith('#') } | ForEach-Object {
+              $skip += '--skip'; $skip += $_.Trim()
+            }
+            if ($skip.Count) { "Skipped as known upstream failures: $(($skip | Where-Object { $_ -ne '--skip' }) -join ', ')" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY }
+          }
+          cargo test --workspace --locked -- --exact @skip
+          exit $LASTEXITCODE
 
       - name: Clippy (warnings shown, not fatal)
         if: always()

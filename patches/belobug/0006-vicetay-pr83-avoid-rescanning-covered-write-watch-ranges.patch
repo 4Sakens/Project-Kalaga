@@ -1,18 +1,18 @@
-From 755dc92dd8c1d0b252f556fe454b9be6896bf766 Mon Sep 17 00:00:00 2001
+From 22951662b3ef3635d5b59a0253921d6affc08663 Mon Sep 17 00:00:00 2001
 From: Taynan Piza <157688638+TaynanGT@users.noreply.github.com>
 Date: Thu, 26 Nov 2026 20:00:06 -0300
 Subject: [PATCH] Avoid rescanning covered write-watch ranges
 
 ---
  crates/victory-gpu/src/host.rs  |  13 ++--
- crates/victory-gpu/src/watch.rs | 117 +++++++++++++++++++-------------
- 2 files changed, 74 insertions(+), 56 deletions(-)
+ crates/victory-gpu/src/watch.rs | 119 +++++++++++++++++++-------------
+ 2 files changed, 76 insertions(+), 56 deletions(-)
 
 diff --git a/crates/victory-gpu/src/host.rs b/crates/victory-gpu/src/host.rs
-index 9aca43d..e7e442f 100644
+index fd4d49a..28d3a6f 100644
 --- a/crates/victory-gpu/src/host.rs
 +++ b/crates/victory-gpu/src/host.rs
-@@ -8679,8 +8679,8 @@ impl Batch {
+@@ -8587,8 +8587,8 @@ impl Batch {
          }
          let ahead = spans.len() > 1;
          if ahead {
@@ -23,7 +23,7 @@ index 9aca43d..e7e442f 100644
          }
          #[cfg(feature = "diagnostics")]
          FLUSHES[3].fetch_add(spans.len() as u64, Ordering::Relaxed);
-@@ -8849,13 +8849,8 @@ impl Batch {
+@@ -8751,13 +8751,8 @@ impl Batch {
          let ahead = self.refreshes.len() > 1;
          if ahead {
              let started = std::time::Instant::now();
@@ -40,7 +40,7 @@ index 9aca43d..e7e442f 100644
          }
          if wide_refresh() && self.refreshes.len() >= 4 {
 diff --git a/crates/victory-gpu/src/watch.rs b/crates/victory-gpu/src/watch.rs
-index ada5ec7..1f790f5 100644
+index ed25a33..5b4eb9b 100644
 --- a/crates/victory-gpu/src/watch.rs
 +++ b/crates/victory-gpu/src/watch.rs
 @@ -354,46 +354,57 @@ static JOURNAL: RwLock<Journal> = RwLock::new(Journal {
@@ -175,7 +175,7 @@ index ada5ec7..1f790f5 100644
      let now = j.ahead_asked;
      for (page, parts) in written {
          j.notes.note(page, parts, now);
-@@ -1054,7 +1069,7 @@ pub(crate) fn ask_once(ranges: &[(usize, usize)]) {
+@@ -1045,7 +1060,7 @@ pub(crate) fn ask_once(ranges: &[(usize, usize)]) {
      // other threads' askings again (0.5 ms a time, run fills-ab3), and no
      // other asking comes between the two parts.
      let _all = Asking::hold_all();
@@ -184,7 +184,7 @@ index ada5ec7..1f790f5 100644
      spent.next("asking: the rest");
      ask_rest(ranges, true);
      spent.end();
-@@ -1066,7 +1081,7 @@ fn ask_rest(ranges: &[(usize, usize)], held: bool) {
+@@ -1057,7 +1072,7 @@ fn ask_rest(ranges: &[(usize, usize)], held: bool) {
      let _all = (!held).then(Asking::hold_all);
      let mut ahead = {
          let mut j = journal_mut();
@@ -193,7 +193,7 @@ index ada5ec7..1f790f5 100644
      };
      // `ask_ahead` leaves a range that lies alone to `writes`, which asks
      // once per flush: with one asking for the submission that was every
-@@ -1074,20 +1089,18 @@ fn ask_rest(ranges: &[(usize, usize)], held: bool) {
+@@ -1065,20 +1080,18 @@ fn ask_rest(ranges: &[(usize, usize)], held: bool) {
      // askings a frame with the switch on, as without it). They are asked
      // here, once; what is not write-watched stays with `writes`.
      let mut written = Vec::new();
@@ -217,7 +217,7 @@ index ada5ec7..1f790f5 100644
      let answers = spread_each(alone_ranges.len(), |r| {
          let (first, last) = alone_ranges[r];
          #[cfg(feature = "diagnostics")]
-@@ -1100,7 +1113,7 @@ fn ask_rest(ranges: &[(usize, usize)], held: bool) {
+@@ -1091,7 +1104,7 @@ fn ask_rest(ranges: &[(usize, usize)], held: bool) {
      for (&(first, last), found) in alone_ranges.iter().zip(answers) {
          if let Some(pages) = found {
              written.extend(pages);
@@ -226,7 +226,7 @@ index ada5ec7..1f790f5 100644
          }
      }
      note_hot(&written);
-@@ -1113,8 +1126,8 @@ fn ask_rest(ranges: &[(usize, usize)], held: bool) {
+@@ -1104,8 +1117,8 @@ fn ask_rest(ranges: &[(usize, usize)], held: bool) {
          let now = note_shared(&written);
          let mut j = journal_mut();
          j.ahead_asked = now;
@@ -237,7 +237,7 @@ index ada5ec7..1f790f5 100644
          return;
      }
      let mut j = journal_mut();
-@@ -1123,8 +1136,8 @@ fn ask_rest(ranges: &[(usize, usize)], held: bool) {
+@@ -1114,8 +1127,8 @@ fn ask_rest(ranges: &[(usize, usize)], held: bool) {
      for (page, parts) in written {
          j.notes.note(page, parts, now);
      }
@@ -248,7 +248,7 @@ index ada5ec7..1f790f5 100644
  }
  
  /// Diagnostics: the ranges a submission's asking asks about alone
-@@ -3927,9 +3940,18 @@ mod parts_tests {
+@@ -3918,9 +3931,18 @@ mod parts_tests {
  
      #[test]
      fn ranges_asked_ahead_hold_what_lies_in_one_of_them() {
@@ -269,7 +269,7 @@ index ada5ec7..1f790f5 100644
          for first in 0..60 {
              for last in first + 1..62 {
                  let slow = all.iter().any(|&(a, b)| a <= first && last <= b);
-@@ -3937,7 +3959,7 @@ mod parts_tests {
+@@ -3928,7 +3950,7 @@ mod parts_tests {
              }
          }
          assert!(!Ahead::new().holds(0, 1));
@@ -278,15 +278,17 @@ index ada5ec7..1f790f5 100644
          assert!(ahead.ranges.is_empty() && !ahead.holds(10, 11));
      }
  
-@@ -4341,6 +4363,7 @@ mod tests {
+@@ -4332,6 +4354,9 @@ mod tests {
      /// copied.
      #[test]
      fn the_rest_of_the_one_asking_has_a_number_of_its_own() {
-+        let _one = one_asking_test();
++        // Belobug has no one_asking_test helper (Vice-Tay's watch.rs does): the same lock, here.
++        static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
++        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
          // SAFETY: a fresh write-watched allocation, freed at the end.
          let p = unsafe {
              VirtualAlloc(std::ptr::null(), 4 * PAGE, MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH, PAGE_READWRITE)
-@@ -4348,7 +4371,7 @@ mod tests {
+@@ -4339,7 +4364,7 @@ mod tests {
          assert_ne!(p, 0);
          // One range: `ask_ahead` leaves it.
          let ranges = [(p, p + 4 * PAGE)];

@@ -1,0 +1,7 @@
+# Upstream tests that fail on GitHub's Windows machines with or without our
+# patches (the "bare" leg fails them too). The Runtimes workflow skips them by
+# exact name; anything else that fails still fails the run.
+#
+# No GPU on the runner: D3D12 falls back to WARP, which does not reject a draw
+# outside the depth bounds (left 255, right 0). VIctory-RDNA 2c5a395.
+pipeline::host::tests::depth_bounds_pipeline_loads_and_filters_draws
