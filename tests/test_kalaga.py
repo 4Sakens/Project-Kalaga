@@ -555,6 +555,27 @@ class CliTests(TempCase):
             code = cli.main(argv)
         return code, buffer.getvalue()
 
+    def test_bug_report_zips_the_newest_run_and_its_stats(self) -> None:
+        import zipfile
+        game = make_game(self.root)
+        cfg = self._config(game)
+        logs = self.root / "logs"
+        logs.mkdir()
+        cfg.write_text(f"logs_dir = '{logs}'\n" + cfg.read_text(encoding="utf-8")
+                       + "[launch]\npreset = 'rx7600-rdna'\n", encoding="utf-8")
+        run = "".join(SessionTests.line(f, 30.0, 12.0, 1800) for f in (19.0, 20.0, 21.0))
+        (logs / "victory-1.log").write_text("x WARN victory: something odd\n" + run, encoding="utf-8")
+        out_zip = self.root / "b.zip"
+        code, out = self._run(["bug", "--config", str(cfg), "--out", str(out_zip), "black road near the pier"])
+        self.assertEqual(code, 0, out)
+        names = zipfile.ZipFile(out_zip).namelist()
+        self.assertTrue(any(n.endswith("victory-1.log") for n in names), names)
+        report = next(zipfile.ZipFile(out_zip).read(n).decode() for n in names if n.endswith("report.md"))
+        self.assertIn("black road near the pier", report)
+        self.assertIn("VICTORY_TEXTURE_BUDGET_MB", report)
+        self.assertIn("3 s in the world", report)
+        self.assertIn("something odd", report)
+
     def test_validate_ok(self) -> None:
         game = make_game(self.root)
         cfg = self._config(game)
@@ -694,6 +715,28 @@ class UpstreamPatchTests(unittest.TestCase):
             self.assertGreater(len(series.patches), 0, name)
 
 
+class SeriesStampTests(unittest.TestCase):
+    """kalaga home patches a checkout again when the series changed."""
+
+    def test_fingerprint_follows_patch_bytes_and_base(self) -> None:
+        from kalaga import upstream
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "x").mkdir()
+            (root / "x" / "UPSTREAM.toml").write_text(
+                'repo = "r"\nbranch = "main"\ncommit = "aaaa"\n', encoding="utf-8")
+            (root / "x" / "0001-a.patch").write_text("one", encoding="utf-8")
+            first = upstream.fingerprint(upstream.load("x", root))
+            (root / "x" / "0001-a.patch").write_text("two", encoding="utf-8")
+            second = upstream.fingerprint(upstream.load("x", root))
+            self.assertNotEqual(first, second)
+            checkout = root / "co"
+            (checkout / ".git").mkdir(parents=True)
+            self.assertIsNone(upstream.applied_fingerprint(checkout))
+            upstream.write_fingerprint(checkout, upstream.load("x", root))
+            self.assertEqual(upstream.applied_fingerprint(checkout), second)
+
+
 class SessionTests(unittest.TestCase):
     """kalaga session reads the runtime's once-a-second frame line."""
 
@@ -707,6 +750,23 @@ class SessionTests(unittest.TestCase):
             f"pipeline ({making} being made) and 0 indirect; heap buffers 1.0 passes 0.2 ms; "
             "texture slots written so far: 10 placed, 3 of objects; ...\n"
         )
+
+    def test_screenshot_waits_for_seconds_in_the_world(self) -> None:
+        from unittest import mock
+        from kalaga import session
+        shooter = session.ScreenShooter(Path(tempfile.gettempdir()) / "kalaga-none.png", after=3)
+        started = []
+        with mock.patch.object(session.sys, "platform", "win32"), \
+                mock.patch.object(session.threading, "Thread",
+                                  side_effect=lambda **kw: mock.Mock(start=lambda: started.append(1))):
+            for line in ["loading\n", self.line(60.0, 2.0, 1.0, 40), self.line(20.0, 30.0, 12.0, 1800),
+                         self.line(20.0, 30.0, 12.0, 1800)]:
+                shooter.feed(line)
+            self.assertEqual(started, [])
+            shooter.feed(self.line(20.0, 30.0, 12.0, 1800))
+            shooter.feed(self.line(20.0, 30.0, 12.0, 1800))
+        self.assertEqual(started, [1])
+        self.assertEqual(shooter.world_seconds, 3)
 
     def test_parses_and_keeps_only_seconds_in_the_world(self) -> None:
         from kalaga import session

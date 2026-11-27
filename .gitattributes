@@ -1,2 +1,4 @@
 # Patches must reach git am byte for byte: no CRLF conversion on Windows.
 *.patch -text
+# Batch files need CRLF line endings to run.
+*.bat text eol=crlf

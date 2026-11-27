@@ -60,6 +60,43 @@ class Report:
         return "\n".join(lines)
 
 
+def fingerprint(series: Upstream) -> str:
+    """A short hash of the series: its base commit and every patch's bytes.
+
+    Written into the checkout after the series goes in, so ``kalaga home``
+    can tell a checkout patched with an older series (after a pull of
+    Kalaga) and patch it again on its own.
+    """
+    import hashlib
+
+    h = hashlib.sha256(series.commit.encode())
+    for patch in series.patches:
+        h.update(patch.name.encode())
+        h.update(patch.read_bytes())
+    return h.hexdigest()[:16]
+
+
+STAMP = "kalaga-series"
+
+
+def stamp_path(checkout: Path) -> Path:
+    """Where the fingerprint of the series last applied is kept (inside .git)."""
+    return Path(checkout) / ".git" / STAMP
+
+
+def applied_fingerprint(checkout: Path) -> str | None:
+    try:
+        return stamp_path(checkout).read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
+def write_fingerprint(checkout: Path, series: Upstream) -> None:
+    path = stamp_path(checkout)
+    if path.parent.is_dir():
+        path.write_text(fingerprint(series) + "\n", encoding="utf-8")
+
+
 def runtimes() -> list[str]:
     if not PATCH_ROOT.is_dir():
         return []

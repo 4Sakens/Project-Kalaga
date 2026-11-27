@@ -357,6 +357,7 @@ def cmd_session(args) -> int:
           f"({args.minutes:g} min in the world + {args.load_seconds} s to load); results in {out_dir}")
     print("          Play the same stretch every run (same save, same route), so the runs compare.")
     results: list[session.Result] = []
+    shots: dict[int, str | None] = {}
     queue = [(name, False) for name in names]
     i = 0
     while queue:
@@ -373,9 +374,15 @@ def cmd_session(args) -> int:
                 break
         print(f"[{i}/{len(names)}] {name}: running {run_seconds} s, log {launch_plan.log_path}")
         sampler = session.MemorySampler()
+        shot_name = f"{i:02d}-{name}{'-retry' if is_retry else ''}.png"
+        shooter = session.ScreenShooter(out_dir / shot_name, after=args.shot_after)
+        if args.shot_after > 0:
+            print(f"          stand still in your spot from loading in: the screenshot is taken "
+                  f"{args.shot_after} s into the world")
         stop_session = False
         try:
-            code = launch.execute(launch_plan, timeout=run_seconds, on_spawn=sampler.start, echo=False)
+            code = launch.execute(launch_plan, timeout=run_seconds, on_spawn=sampler.start, echo=False,
+                                  on_line=shooter.feed if args.shot_after > 0 else None)
         except KeyboardInterrupt:
             print("\n          stopped (Ctrl+C): this run is kept, the rest are skipped")
             code, stop_session = 130, True
@@ -383,6 +390,7 @@ def cmd_session(args) -> int:
             print(f"          could not start {launch_plan.argv[0]}: {exc}", file=sys.stderr)
             code = f"did not start ({exc.__class__.__name__})"
         ram, vram = sampler.stop()
+        shots[len(results)] = shot_name if args.shot_after > 0 and shooter.finish() else None
         try:
             text = launch_plan.log_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
@@ -415,6 +423,17 @@ def cmd_session(args) -> int:
              "(sampled every 20 s, Windows only).", ""]
     for r in results:
         lines.append(f"- `{r.preset}`: {presets.get(r.preset).summary} — log `{r.log}`")
+    taken = [(r, shots.get(n)) for n, r in enumerate(results) if shots.get(n)]
+    if taken:
+        lines += ["", "## Side by side", "",
+                  f"The screen {args.shot_after} s into the world in each run (same spot, standing "
+                  "still). Fuzzy on one and sharp on another: that preset's render scale or console "
+                  "is the cause; black patches on all of them: the runtime.", ""]
+        for r, shot in taken:
+            lines += [f"### {r.preset}", "", f"![{r.preset}]({shot})", ""]
+    elif args.shot_after > 0 and sys.platform == "win32":
+        lines += ["", "No screenshots were saved (no run reached "
+                  f"{args.shot_after} s in the world, or the screen copy failed).", ""]
     summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
     bundle = out_dir.with_suffix(".zip")
     with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as z:
@@ -422,6 +441,8 @@ def cmd_session(args) -> int:
         for r in results:
             if Path(r.log).is_file():
                 z.write(r.log, f"session-{stamp}/{Path(r.log).name}")
+        for _, shot in taken:
+            z.write(out_dir / shot, f"session-{stamp}/{shot}")
         crashes = launch.crash_log(env, cfg)
         if crashes.is_file():
             z.writestr(f"session-{stamp}/crashes-tail.log", launch.tail(crashes, 200))
@@ -450,6 +471,108 @@ def cmd_session(args) -> int:
         print(f"          to use it: python -m kalaga session --apply next time, or set "
               f"[launch] preset = '{pick.preset}'")
     print(f"\nsummary : {summary}\nsend    : {bundle}")
+    return EXIT_OK
+
+
+def cmd_bug(args) -> int:
+    """Zip what a bug needs: logs, preset and switches, runtime build, frame stats."""
+
+    import time
+    import zipfile
+
+    cfg = _cfg(args)
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    cfg.logs_dir.mkdir(parents=True, exist_ok=True)
+    bundle = Path(args.out) if args.out else cfg.logs_dir / f"bug-{stamp}.zip"
+    root = f"bug-{stamp}"
+    notes: list[str] = [f"# Kalaga bug report {stamp}", ""]
+    if args.what:
+        notes += ["## What happened", "", args.what, ""]
+
+    # The runs: newest runtime logs, the one the bug is in first.
+    logs = sorted(
+        (p for p in cfg.logs_dir.glob("*.log") if p.is_file()),
+        key=lambda p: p.stat().st_mtime, reverse=True,
+    )[: max(1, args.logs)]
+    preset_name = cfg.launch.preset or ""
+    notes += ["## Setup", "", f"- preset: `{preset_name or '(none)'}`"]
+    if preset_name:
+        try:
+            preset = presets.get(preset_name)
+            notes.append(f"- checkout: {preset.checkout}, console: {preset.console}")
+            notes += ["", "Switches:", "", "```"]
+            notes += [f"{k}={v}" for k, v in sorted(presets.environment(preset).items())]
+            notes += ["```"]
+        except KeyError:
+            notes.append("- (that preset is not known to this Kalaga)")
+    victory_dir = Path(cfg.runtime.victory_dir) if cfg.runtime.victory_dir else None
+    if victory_dir and (victory_dir / ".git").is_dir():
+        _, head, _ = util.run(["git", "-C", str(victory_dir), "log", "-1", "--format=%H %cd %s", "--date=iso"])
+        _, branch, _ = util.run(["git", "-C", str(victory_dir), "rev-parse", "--abbrev-ref", "HEAD"])
+        _, origin, _ = util.run(["git", "-C", str(victory_dir), "remote", "get-url", "origin"])
+        _, dirty, _ = util.run(["git", "-C", str(victory_dir), "status", "--porcelain", "--untracked-files=no"])
+        notes += ["", f"- runtime: {origin.strip()} on `{branch.strip()}`", f"- HEAD: {head.strip()}",
+                  f"- local changes: {'yes' if dirty.strip() else 'none'}"]
+        applied = upstream.applied_fingerprint(victory_dir)
+        for name in upstream.runtimes():
+            series = upstream.load(name)
+            if series.repo.lower().rstrip("/").removesuffix(".git") in origin.lower():
+                current = upstream.fingerprint(series)
+                state = ("this Kalaga's series" if applied == current
+                         else "an older series (run Start-Kalaga.bat to patch again)" if applied
+                         else "unknown (not patched by kalaga home)")
+                notes.append(f"- patches: {len(series.patches)} in `{name}`; checkout has {state}")
+    else:
+        notes.append(f"- runtime folder: {victory_dir or '(not set)'}")
+    _, kal, _ = util.run(["git", "-C", str(config.REPO_ROOT), "log", "-1", "--format=%h %cd", "--date=iso"])
+    notes.append(f"- Kalaga: {kal.strip() or '?'}")
+
+    env = doctor.detect(
+        victory_dir=cfg.runtime.victory_dir,
+        xcl_dir=cfg.runtime.xcl_dir,
+        dxc_dir=cfg.runtime.dxc_dir,
+        toolchain_bin=cfg.runtime.toolchain_bin,
+    )
+    notes += [f"- OS: {env.os_caption} {env.os_version} (build {env.os_build})",
+              f"- GPU: {env.gpu or '?'} driver {env.gpu_driver or '?'}", f"- RAM: {env.ram_gib} GiB", ""]
+
+    # The last minute of frame lines of the newest run: what it was doing.
+    if logs:
+        text = logs[0].read_text(encoding="utf-8", errors="replace")
+        result = session.Result(logs[0].stem, session.parse(text))
+        st = result.stats()
+        last = result.seconds[-60:]
+        notes += ["## Newest run", "", f"- log: `{logs[0].name}`, exit: {session.exit_label(None, text)}"]
+        if st.get("world_s"):
+            notes.append(f"- {st['world_s']} s in the world, median {st['fps_median']:.1f} fps, "
+                         f"{st['hitches']} hitches, {result.bound()}-bound")
+        if last:
+            fps = [s.fps for s in last]
+            notes.append(f"- last {len(last)} s: {min(fps):.1f}-{max(fps):.1f} fps, "
+                         f"{last[-1].draws} draws/frame, {last[-1].dropped} dropped without a pipeline "
+                         f"({last[-1].making} being made)")
+        errors = [ln for ln in text.splitlines() if " ERROR " in ln or " WARN " in ln][-40:]
+        if errors:
+            notes += ["", "Last warnings and errors:", "", "```", *errors, "```"]
+        notes.append("")
+
+    crashes = launch.crash_log(env, cfg)
+    with zipfile.ZipFile(bundle, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(f"{root}/report.md", "\n".join(notes) + "\n")
+        for log in logs:
+            z.write(log, f"{root}/{log.name}")
+        if crashes.is_file():
+            z.writestr(f"{root}/crashes-tail.log", launch.tail(crashes, 300))
+        prepared = cfg.logs_dir / launch.PREPARED_FILE
+        if prepared.is_file():
+            z.write(prepared, f"{root}/{prepared.name}")
+        sessions = sorted(cfg.logs_dir.glob("session-*/summary.md"), key=lambda p: p.stat().st_mtime)
+        if sessions:
+            z.write(sessions[-1], f"{root}/last-session-summary.md")
+        if cfg.path and Path(cfg.path).is_file():
+            z.write(cfg.path, f"{root}/kalaga.toml")
+    print("\n".join(notes))
+    print(f"report  : {bundle}")
     return EXIT_OK
 
 
@@ -624,12 +747,19 @@ def cmd_home(args) -> int:
 
         step(f"3. picked upstream fixes ({len(series.patches)} patches) on branch kalaga-prs")
         rc, branch, _ = util.run(["git", "-C", str(runtime_dir), "rev-parse", "--abbrev-ref", "HEAD"])
-        if branch.strip() == "kalaga-prs" and not args.repatch:
-            print("already on kalaga-prs (use --repatch after a git pull of Kalaga brought new patches)")
+        current = branch.strip() == "kalaga-prs" and (
+            upstream.applied_fingerprint(runtime_dir) == upstream.fingerprint(series)
+        )
+        if current and not args.repatch:
+            print("already on kalaga-prs with this series")
         else:
+            if branch.strip() == "kalaga-prs" and not args.repatch:
+                print("the patches changed since this checkout was patched: patching it again")
             run(["git", "-C", str(runtime_dir), "fetch", "origin", series.commit], check=False)
             run(["git", "-C", str(runtime_dir), "checkout", "-B", "kalaga-prs", series.commit])
             kalaga("patches", "--runtime", checkout, "--dir", str(runtime_dir), "--strict")
+            if not args.dry_run:
+                upstream.write_fingerprint(runtime_dir, series)
 
         step("4. build victory.exe")
         kalaga("build")
@@ -819,11 +949,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--minutes", type=float, default=4.0, help="minutes in the world per run")
     p.add_argument("--load-seconds", type=int, default=150, help="added per run for loading (default 150)")
     p.add_argument("--no-pause", action="store_true", help="do not wait for Enter between runs")
+    p.add_argument("--shot-after", type=int, default=20,
+                   help="seconds in the world before each run's screenshot (0: none; default 20)")
     p.add_argument("--no-retry", action="store_true",
                    help="do not retry a crashed run with the safe set")
     p.add_argument("--apply", action="store_true",
                    help="write the picked preset into kalaga.toml ([launch] preset)")
     p.set_defaults(func=cmd_session)
+
+    p = sub.add_parser("bug", parents=[common],
+                       help="zip logs, preset, runtime build and frame stats for a bug report")
+    p.add_argument("what", nargs="?", default="", help="one line on what you saw and where")
+    p.add_argument("--logs", type=int, default=3, help="newest runtime logs to include (default 3)")
+    p.add_argument("--out", help="zip path (default logs/bug-<time>.zip)")
+    p.set_defaults(func=cmd_bug)
 
     p = sub.add_parser("home", parents=[common],
                        help="first evening at the PC: clone, patch, build, prepare, first run, session")

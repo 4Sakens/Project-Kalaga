@@ -231,11 +231,12 @@ def compose(assessment: Assessment, scan: gamefs.GameScan, cfg: Config) -> Launc
     )
 
 
-def execute(plan: LaunchPlan, timeout: int = 0, on_spawn=None, echo: bool = True) -> int:
+def execute(plan: LaunchPlan, timeout: int = 0, on_spawn=None, echo: bool = True, on_line=None) -> int:
     """Run the plan, teeing output to stdout and the log file.
 
     ``on_spawn(pid)`` is called once the process exists (kalaga session uses
-    it to sample memory); ``echo=False`` writes only to the log.
+    it to sample memory); ``on_line(line)`` sees every line (screenshots);
+    ``echo=False`` writes only to the log.
     """
 
     with open(plan.log_path, "w", encoding="utf-8", errors="replace") as log:
@@ -280,6 +281,11 @@ def execute(plan: LaunchPlan, timeout: int = 0, on_spawn=None, echo: bool = True
                     print(line, end="")
                 log.write(line)
                 log.flush()
+                if on_line is not None:
+                    try:
+                        on_line(line)
+                    except Exception:  # pragma: no cover - a hook never ends the run
+                        pass
         except KeyboardInterrupt:  # pragma: no cover - interactive
             proc.terminate()
             raise

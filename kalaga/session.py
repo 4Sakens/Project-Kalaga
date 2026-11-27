@@ -185,6 +185,68 @@ class MemorySampler:
         return gb(self.ram_peak), gb(self.vram_peak)
 
 
+class ScreenShooter:
+    """One screenshot of the screen per run, taken in the world (Windows).
+
+    Fed the runtime's output line by line (``launch.execute(on_line=...)``):
+    after ``after`` seconds in the world (frame lines with over
+    ``WORLD_DRAWS`` draws) it saves the primary screen as a PNG. The session
+    asks the player to stand still in the same spot then, so the presets'
+    pictures compare (fuzziness, black textures). Taken with GDI from
+    PowerShell: VIctory's full screen is a frameless window, which the
+    desktop composes, so the copy shows the game.
+    """
+
+    SCRIPT = (
+        "Add-Type -AssemblyName System.Windows.Forms,System.Drawing;"
+        "Add-Type -Name U -Namespace K -MemberDefinition "
+        "'[DllImport(\"user32.dll\")] public static extern bool SetProcessDPIAware();';"
+        "[void][K.U]::SetProcessDPIAware();"
+        "$b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds;"
+        "$m=New-Object System.Drawing.Bitmap $b.Width,$b.Height;"
+        "$g=[System.Drawing.Graphics]::FromImage($m);"
+        "$g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size);"
+        "$m.Save('{path}',[System.Drawing.Imaging.ImageFormat]::Png)"
+    )
+
+    def __init__(self, path, after: int = 20) -> None:
+        self.path = path
+        self.after = after
+        self.world_seconds = 0
+        self.taken: bool = False
+        self._thread: threading.Thread | None = None
+
+    def feed(self, line: str) -> None:
+        if self._thread is not None:
+            return
+        m = FRAME_LINE.search(line)
+        if not m or int(m["draws"]) <= WORLD_DRAWS:
+            return
+        self.world_seconds += 1
+        if self.world_seconds >= self.after and sys.platform == "win32":
+            self._thread = threading.Thread(target=self._shoot, daemon=True)
+            self._thread.start()
+
+    def _shoot(self) -> None:
+        script = self.SCRIPT.format(path=str(self.path).replace("'", "''"))
+        try:
+            subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                capture_output=True, timeout=30,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return
+
+    def finish(self) -> bool:
+        """Waits for a shot in flight; whether a picture was saved."""
+        if self._thread is not None:
+            self._thread.join(timeout=35)
+        from pathlib import Path
+        self.taken = Path(self.path).is_file() and Path(self.path).stat().st_size > 0
+        return self.taken
+
+
 # The card's 8 GB less what Windows and the desktop keep: over this a preset
 # lives on borrowed system memory (late textures, stutter, device removal).
 VRAM_LIMIT_GB = 7.5
