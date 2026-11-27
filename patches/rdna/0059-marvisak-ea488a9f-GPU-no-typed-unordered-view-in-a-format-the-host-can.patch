@@ -1,0 +1,64 @@
+From ff44f8cf9d75d9df932e0c4ab53537021daf011e Mon Sep 17 00:00:00 2001
+From: lhnizdo <lubos.hnizdo.matfyz@gmail.com>
+Date: Wed, 25 Nov 2026 22:57:19 +0100
+Subject: [PATCH 59/60] GPU: no typed unordered view in a format the host
+ cannot store to (#2462)
+
+* GPU: no typed unordered view in a format the host cannot store to
+
+fits() asked the host whether it stores to a typed unordered view's
+format only for views cast to another family. A view in the texture's
+own format went to CreateUnorderedAccessView unchecked, and on an NVIDIA
+card (Windows 10) the title's B5G5R5A1_UNORM unordered views, which that
+card does not take, removed the device with DXGI_ERROR_INVALID_CALL
+during loading (the debug layer: "The format (0x56, B5G5R5A1_UNORM)
+cannot be used with a Typed Unordered Access View", then RemoveDevice).
+
+Every typed unordered view is now checked: one the host cannot store to
+is not made, as other views the host does not allow, and its slot stays
+null.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_018sSQTeDQ6Kc6DEkgPbAww8
+
+* GPU: the store check looks at the format the unordered view is made in
+
+Review of #2462: for a view of a typed texture in another format of its
+family that is not castable, fits() makes the view in the texture's own
+format, but the store check looked at the requested one. It now checks
+the format the view is made in.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+
+---------
+
+Co-authored-by: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit ea488a9f9901e4375c547a57795ae8cb79d577a4)
+---
+ crates/victory-gpu/src/descriptor/host.rs | 10 ++++++++++
+ 1 file changed, 10 insertions(+)
+
+diff --git a/crates/victory-gpu/src/descriptor/host.rs b/crates/victory-gpu/src/descriptor/host.rs
+index c6a3c2c6..29044fdd 100644
+--- a/crates/victory-gpu/src/descriptor/host.rs
++++ b/crates/victory-gpu/src/descriptor/host.rs
+@@ -4430,6 +4430,16 @@ fn fits(texture: &ID3D12Resource, mut format: Option<&mut DXGI_FORMAT>, unordere
+         format.0 = linear as i32;
+     }
+     let view = format.as_ref().map_or(0, |f| f.0 as u32);
++    // A typed unordered view in a format the host cannot store to
++    // (B5G5R5A1_UNORM on NVIDIA) removes the device when made, in the
++    // texture's own format too: the slot stays null, its writes dropped.
++    // The format checked is the one the view is made in: a typed
++    // texture's own unless the requested one is castable (below).
++    let typed = if view == 0 || (!typeless && !castable.contains(&view)) { own } else { view };
++    if unordered && !(view == 0 && typeless) && !typed_store(typed) {
++        once!(view = typed, own, "an unordered view in a format the host cannot store");
++        return false;
++    }
+     if view == 0 {
+         return !typeless;
+     }
+-- 
+2.43.0
+

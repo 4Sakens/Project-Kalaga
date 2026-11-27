@@ -159,3 +159,32 @@ Not taken: c92d5cf (publish cached mips; RDNA reworked the upload into
 `PreludeUpload`, 6 conflicts), c44e2ce (#283 on-demand levels within the VRAM
 budget, 525 lines), 79d0b2b (overlaps #287), #470 (detile retry, 360-line
 conflict). 1ad6e67 (Series S black screen) is already in RDNA as 85a663d.
+
+## Sixth pass: DexNom/VIctory and the original Marvisak/VIctory (2026-11-27)
+
+DexNom/VIctory is a fork of Marvisak/VIctory carrying ZSlayerHQ's
+victory-world Radeon line as one squashed import (570a941e, 170 files) plus
+20 commits. Marvisak/VIctory is the original; it diverged from VIctory-RDNA
+at ffe310e (2026-11-24), and many of its fixes are already in RDNA under
+other wording. Both series (rdna 0056-0060, belobug 0050-0054):
+
+| Fix | What it does |
+|---|---|
+| dexnom-76749ce5 wave64 mask from scalar copies | a wave64 mask parked in two SGPRs and restored dword by dword was not recognised: the voxel visibility shader failed to translate |
+| dexnom-ddb73326 sampler chosen by a branch | a phi of two immediate samplers could not be lowered: DexNom counts 40 world shader variants lost (their draws were dropped) |
+| dexnom-921d8d3b interior mips | a streaming texture with only its middle levels mapped counted as absent and stayed black |
+| marvisak-ea488a9f typed UAV formats | every typed unordered view is checked against what the host can store (a device removal on some cards) |
+| marvisak-78ed12eb null CBV | a null constant buffer description cleared nothing, so the slot kept another buffer's constants |
+
+Already in RDNA: integer-target blending (`host_blend`), the base-2 LOD
+fix, pixel quad reads reaching helpers, normalized buffer codes.
+
+Not taken: DexNom 5f4c3df4 (City texture streaming and Radeon shadow
+pipelines, 2,600 lines over 27 files) and bc3cd4b0/b8ff22e4 (ray tracing
+preview), both built on the victory-world tree; the rest of 921d8d3b
+(early depth pipeline queue: RDNA's queue is different; ray buffer views).
+Marvisak 0736f8b3 (Series S UI planes composited, 12 conflicts), 61bfc773
+(placed unordered texture views), 842b0cb7 (depth bounds reach the host),
+315cea18 (barrier start states): large conflicts. 4a53da72 fixes a bug in
+discard handling that RDNA does not have. 77fd8195 (cube denormals) needs
+an ftz helper RDNA lacks. e53474cd is an NVIDIA-only device removal.
