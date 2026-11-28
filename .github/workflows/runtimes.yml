@@ -232,6 +232,8 @@ jobs:
         timeout-minutes: 40
         working-directory: runtime
         shell: pwsh
+        env:
+          CARGO_TERM_COLOR: never
         run: |
           $names = @('bytes_under_overlapping_ranges', 'frame_of_refreshes', 'texture_checks_per_submission',
                      'spans_of_a_pass', 'copy_costs', 'pass_overhead')
@@ -239,8 +241,12 @@ jobs:
           cargo test --release --locked -p victory-gpu --lib --no-run 2>&1 | Out-Null
           foreach ($n in $names) {
             $lines = cargo test --release --locked -p victory-gpu --lib -- --ignored --nocapture --test-threads=1 $n 2>&1
-            $kept = $lines | ForEach-Object { "$_" } | Where-Object {
-              $_ -and $_ -notmatch '^(running \d+ tests?|test result:|\s+(Compiling|Finished|Running)|warning:|\s*$)' -and $_ -notmatch '^test .* \.\.\. ok$'
+            # The test's own lines only: its result line and the lines it prints
+            # (cargo's warnings and progress dropped).
+            $kept = $lines | ForEach-Object { "$_" -replace '\x1b\[[0-9;]*m', '' } | Where-Object {
+              ($_ -match '^test ' -and $_ -notmatch '^test result:') -or
+              ($_ -match '^\s*\d+ bytes ' ) -or
+              ($_ -and $_ -notmatch '^(warning|error|note|help|running|\s|=|\||-->|\d+\s*\|)' -and $_ -ne 'ok')
             }
             if ($lines -match 'running 0 tests') { $out += "$n`: not in this tree" ; continue }
             $out += "== $n"
