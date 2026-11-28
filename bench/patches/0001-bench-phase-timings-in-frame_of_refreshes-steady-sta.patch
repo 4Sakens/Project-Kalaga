@@ -1,14 +1,14 @@
-From 1b640a04bfbd73225efb3209b987789d14702425 Mon Sep 17 00:00:00 2001
+From 81443f8acd9cb0d0e920dbc0d42281969e58d229 Mon Sep 17 00:00:00 2001
 From: kalaga <k@k>
 Date: Fri, 27 Nov 2026 21:25:30 -0500
-Subject: [PATCH] bench: phase timings in frame_of_refreshes
+Subject: [PATCH] bench: phase timings in frame_of_refreshes (steady state)
 
 ---
- crates/victory-gpu/src/host.rs | 17 +++++++++++++++++
- 1 file changed, 17 insertions(+)
+ crates/victory-gpu/src/host.rs | 30 +++++++++++++++++++++++++++++-
+ 1 file changed, 29 insertions(+), 1 deletion(-)
 
 diff --git a/crates/victory-gpu/src/host.rs b/crates/victory-gpu/src/host.rs
-index ad1e09e..67ef160 100644
+index ad1e09e..140f6e7 100644
 --- a/crates/victory-gpu/src/host.rs
 +++ b/crates/victory-gpu/src/host.rs
 @@ -10949,6 +10949,8 @@ mod spare {
@@ -50,17 +50,38 @@ index ad1e09e..67ef160 100644
      /// Whatever is written where, by the title or by us, and whichever
      /// copies (of both kinds of memory, over one another, none on a page
      /// line) are refreshed in which ranges: a refreshed range holds what
-@@ -11599,6 +11612,10 @@ mod refresh_tests {
+@@ -11536,6 +11549,16 @@ mod refresh_tests {
+         let (mut sum, mut landing) = (0.0, 0.0);
+         const FRAMES: usize = 12;
+         for frame in 0..FRAMES {
++            if frame == 2 {
++                // Steady state only from here (bench).
++                for p in &BENCH_PHASES {
++                    p.store(0, Ordering::Relaxed);
++                }
++                PREPARING[0].store(0, Ordering::Relaxed);
++                PREPARING[1].store(0, Ordering::Relaxed);
++                #[cfg(feature = "diagnostics")]
++                let _ = crate::watch::asks();
++            }
+             let mut took = [0f64; 2];
+             for i in 0..30 {
+                 // The title's writes, and the relay's beside the submission.
+@@ -11599,8 +11622,13 @@ mod refresh_tests {
              best[1],
              landing / (FRAMES - 2) as f64,
          );
-+        let ph: Vec<f64> = BENCH_PHASES.iter().map(|p| p.load(Ordering::Relaxed) as f64 / 1e6 / FRAMES as f64).collect();
++        let steady = (FRAMES - 2) as f64;
++        let ph: Vec<f64> = BENCH_PHASES.iter().map(|p| p.load(Ordering::Relaxed) as f64 / 1e6 / steady).collect();
 +        println!("BENCH phases per frame (ms): ask_once {:.2}, adds+flushes {:.2}, ask_once_end {:.2}", ph[0], ph[1], ph[2]);
-+        let pr = PREPARING[0].load(Ordering::Relaxed) as f64 / 1e3 / FRAMES as f64;
-+        println!("BENCH PREPARING[0] per frame (ms, update time as counted): {pr:.2}; bytes copied per frame {}", PREPARING[1].load(Ordering::Relaxed) / FRAMES as u64);
++        let pr = PREPARING[0].load(Ordering::Relaxed) as f64 / 1e3 / steady;
++        println!("BENCH PREPARING[0] per frame (ms, update time as counted): {pr:.2}; bytes copied per frame {}", PREPARING[1].load(Ordering::Relaxed) / (FRAMES as u64 - 2));
          #[cfg(feature = "diagnostics")]
-         println!("per frame, as `crate::watch::asks`: {:?}", crate::watch::asks().map(|n| n / FRAMES as u64));
+-        println!("per frame, as `crate::watch::asks`: {:?}", crate::watch::asks().map(|n| n / FRAMES as u64));
++        println!("per frame, as `crate::watch::asks`: {:?}", crate::watch::asks().map(|n| n / (FRAMES as u64 - 2)));
      }
+ }
+ 
 -- 
 2.43.0
 
