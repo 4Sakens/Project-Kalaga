@@ -1,0 +1,87 @@
+From 37265635ce457eafcb25ef2ef8c279a57770f42a Mon Sep 17 00:00:00 2001
+From: kalaga <k@k>
+Date: Fri, 27 Nov 2026 22:07:04 -0500
+Subject: [PATCH] bench: update_free breakdown
+
+---
+ crates/victory-gpu/src/host.rs   |  8 ++++++++
+ crates/victory-gpu/src/shadow.rs | 18 +++++++++++++++++-
+ 2 files changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/crates/victory-gpu/src/host.rs b/crates/victory-gpu/src/host.rs
+index 140f6e7..5be29a4 100644
+--- a/crates/victory-gpu/src/host.rs
++++ b/crates/victory-gpu/src/host.rs
+@@ -11556,6 +11556,9 @@ mod refresh_tests {
+                 }
+                 PREPARING[0].store(0, Ordering::Relaxed);
+                 PREPARING[1].store(0, Ordering::Relaxed);
++                for b in &crate::shadow::BENCH_UPDATE {
++                    b.store(0, Ordering::Relaxed);
++                }
+                 #[cfg(feature = "diagnostics")]
+                 let _ = crate::watch::asks();
+             }
+@@ -11627,6 +11630,11 @@ mod refresh_tests {
+         println!("BENCH phases per frame (ms): ask_once {:.2}, adds+flushes {:.2}, ask_once_end {:.2}", ph[0], ph[1], ph[2]);
+         let pr = PREPARING[0].load(Ordering::Relaxed) as f64 / 1e3 / steady;
+         println!("BENCH PREPARING[0] per frame (ms, update time as counted): {pr:.2}; bytes copied per frame {}", PREPARING[1].load(Ordering::Relaxed) / (FRAMES as u64 - 2));
++        let u: Vec<f64> = crate::shadow::BENCH_UPDATE.iter().map(|b| b.load(Ordering::Relaxed) as f64 / steady).collect();
++        println!(
++            "BENCH update per frame (all threads): writes() {:.2} ms, guard check {:.2} ms, copy_stale {:.2} ms, whole copies {:.2} ms; {:.0} pages written, {:.0} watched refreshes, {:.1} MB whole",
++            u[0] / 1e6, u[1] / 1e6, u[2] / 1e6, u[3] / 1e6, u[4], u[5], u[6] / 1e6
++        );
+         #[cfg(feature = "diagnostics")]
+         println!("per frame, as `crate::watch::asks`: {:?}", crate::watch::asks().map(|n| n / (FRAMES as u64 - 2)));
+     }
+diff --git a/crates/victory-gpu/src/shadow.rs b/crates/victory-gpu/src/shadow.rs
+index bef8cde..3e9705c 100644
+--- a/crates/victory-gpu/src/shadow.rs
++++ b/crates/victory-gpu/src/shadow.rs
+@@ -3603,6 +3603,10 @@ unsafe impl Send for Shadow {}
+ // SAFETY: as above.
+ unsafe impl Sync for Shadow {}
+ 
++/// Bench: ns in `watch::writes`, in the guard check, in `copy_stale`, in whole copies;
++/// pages answered written; watched refreshes; bytes copied whole (all threads).
++pub(crate) static BENCH_UPDATE: [AtomicU64; 7] = [const { AtomicU64::new(0) }; 7];
++
+ impl Shadow {
+     /// The host GPU address of a title address inside the buffer.
+     pub(crate) fn gpu(&self, address: u64) -> u64 {
+@@ -4547,11 +4551,20 @@ impl Shadow {
+     /// shader writes.
+     fn update_free(&self, from: usize, to: usize) -> usize {
+         if self.watched.load(Ordering::Relaxed) != NOT_WATCHED {
+-            if let Some((now, written)) = crate::watch::writes(from, to, true) {
++            let t0 = std::time::Instant::now();
++            let asked = crate::watch::writes(from, to, true);
++            BENCH_UPDATE[0].fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
++            if let Some((now, written)) = asked {
+                 // (A range whose blocks rest after a write has no guard now.)
++                let t1 = std::time::Instant::now();
+                 let guarded = crate::watch::guarded(from, to) || self.watched.load(Ordering::Relaxed) == GUARDED;
+                 self.watched.store(if guarded { GUARDED } else { 1 }, Ordering::Relaxed);
++                BENCH_UPDATE[1].fetch_add(t1.elapsed().as_nanos() as u64, Ordering::Relaxed);
++                let t2 = std::time::Instant::now();
+                 let copied = self.copy_stale(from, to, now, &written);
++                BENCH_UPDATE[2].fetch_add(t2.elapsed().as_nanos() as u64, Ordering::Relaxed);
++                BENCH_UPDATE[4].fetch_add(written.len() as u64, Ordering::Relaxed);
++                BENCH_UPDATE[5].fetch_add(1, Ordering::Relaxed);
+                 self.refresh_check(from, to);
+                 #[cfg(feature = "diagnostics")]
+                 {
+@@ -4567,7 +4580,10 @@ impl Shadow {
+         crate::copystat::add(crate::copystat::C::WholeBytes, (to - from) as u64);
+         #[cfg(feature = "diagnostics")]
+         let started = std::time::Instant::now();
++        let t3 = std::time::Instant::now();
+         self.copy(from, to);
++        BENCH_UPDATE[3].fetch_add(t3.elapsed().as_nanos() as u64, Ordering::Relaxed);
++        BENCH_UPDATE[6].fetch_add((to - from) as u64, Ordering::Relaxed);
+         #[cfg(feature = "diagnostics")]
+         crate::copystat::whole(from, to - from, started.elapsed().as_micros() as u64);
+         to - from
+-- 
+2.43.0
+

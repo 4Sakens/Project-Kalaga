@@ -62,10 +62,8 @@ jobs:
           $base = ($preset | Where-Object { $_ -notmatch '^VICTORY_ASK_SPREAD=' }) + @('VICTORY_ASK_SPREAD=0')
           $configs = [ordered]@{
             'nospread gap8M' = $base
-            'nospread gap4M' = $base + @('VICTORY_ASK_GAP_KB=4096')
-            'nospread gap2M' = $base + @('VICTORY_ASK_GAP_KB=2048')
             'nospread gap1M' = $base + @('VICTORY_ASK_GAP_KB=1024')
-            'nospread gap16M' = $base + @('VICTORY_ASK_GAP_KB=16384')
+            'nospread gap256K' = $base + @('VICTORY_ASK_GAP_KB=256')
           }
           if ($env:BENCH_EXTRA) { $configs['preset+extra'] = $preset + ($env:BENCH_EXTRA -split ';') }
           $out = @('### frame_of_refreshes (diagnostics build)', '', '```')
