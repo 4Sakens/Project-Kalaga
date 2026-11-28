@@ -308,3 +308,30 @@ test-only PRs.
 
 A backup bundle of VIctory-RDNA at c0d38c3 with a `kalaga-prs` branch (all
 patches applied) was handed to the user, as Belobug's was.
+
+## Eleventh pass: measured CPU work per frame (2026-11-27 night)
+
+Kalaga's `bench` branch runs VIctory-RDNA's GPU-free frame benchmark
+(`refresh_tests::frame_of_refreshes`: a recorded frame's 30 submissions of
+buffer refreshes, 4,400 copies, a 174 MB heap with landed pieces) on the
+patched tree with phase timers and the runtime's diagnostics counters, on
+GitHub's Windows runner (4 threads; numbers are noisy run to run, so every
+comparison is within one run).
+
+- **`VICTORY_ASK_SPREAD=1` is slower**, and is now left out of the rdna
+  presets (VIctory-RDNA's preset turns it on; its history says "not yet
+  measured"). Several threads asking the kernel's write watch at once wait on
+  each other inside the kernel: refreshes 35 ms a frame with it, 27-29
+  without; kernel time in askings 71 ms (all threads) against 7.
+- **rdna 0077 `VICTORY_ASK_GAP_KB`** (Kalaga's): how far apart a
+  submission's ranges may be and still be one asking (8 MiB by default, as
+  before). 1 MiB walked 1.0 GB a frame instead of 2.6 GB and took the
+  refreshes from 18.5-21.0 to 15.6 ms (and 30-34 to 26-28.6 on a slower
+  runner); 256 KiB was no better; 16 MiB was worse. Where each reset call
+  costs more (more cores), a wider gap may win, so the default stays and the
+  test session gets `rx7600-rdna-askgap` (1 MiB) to measure on the PC.
+- `VICTORY_ASK_NORESET=1` was slower here too (not used).
+- What is left in a refresh: `copy_stale` ~14 ms (all threads; ~124 MB a
+  frame copied, mostly pieces the card wrote landing back through another
+  copy of the same memory), `watch::writes` 7-8 ms. Cutting those means
+  changing the journal's design; left for game-side profiles.

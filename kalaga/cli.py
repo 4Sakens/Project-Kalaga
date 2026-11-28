@@ -306,7 +306,7 @@ def cmd_launch(args) -> int:
 
 
 DEFAULT_SESSION = {
-    "rdna": ["rx7600-rdna", "rx7600-rdna-6core", "rx7600-rdna-balanced", "rx7600-rdna-quality"],
+    "rdna": ["rx7600-rdna", "rx7600-rdna-askgap", "rx7600-rdna-6core", "rx7600-rdna-balanced", "rx7600-rdna-quality"],
     "belobug": ["rx7600-belobug", "rx7600-belobug-6core", "rx7600-belobug-fast"],
     "fork": ["rx7600-fork"],
 }

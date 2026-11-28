@@ -178,7 +178,11 @@ _RDNA_FAST = {
     "VICTORY_PORT_JOURNAL": "1",
     "VICTORY_PORT_BUFFERS": "1",
     "VICTORY_INPLACE": "2",
-    "VICTORY_ASK_SPREAD": "1",
+    # VICTORY_ASK_SPREAD is left off (VIctory-RDNA's preset turns it on,
+    # unmeasured): kernel write-watch askings from several threads at once
+    # wait on each other in the kernel. GPU-free frame benchmark, Kalaga's
+    # bench branch: 35 ms of refreshes a frame with it, 27-29 without; time
+    # in the askings 71 ms (all threads) against 7.
     "VICTORY_RESIDENCY": "1",
     "VICTORY_SYNC_FINE": "1",
     # Kalaga rdna 0067 (foxhound PR #13): copy helpers woken at each
@@ -247,6 +251,13 @@ PRESETS: dict[str, Preset] = {
             checkout="rdna",
             console="series-s",
             env={**_RDNA_COMMON, **_RDNA_FAST, **_SIX_CORES, **_EIGHT_GB_SERIES_S},
+        ),
+        Preset(
+            name="rx7600-rdna-askgap",
+            summary="rx7600-rdna asking the kernel about ranges up to 1 MiB apart together, not 8 (experiment: less walked, more calls)",
+            checkout="rdna",
+            console="series-s",
+            env={**_RDNA_COMMON, **_RDNA_FAST, **_EIGHT_GB_SERIES_S, "VICTORY_ASK_GAP_KB": "1024"},
         ),
         Preset(
             name="rx7600-rdna-firstrun",

@@ -1,0 +1,76 @@
+From 4af9d043ae8c8ff0e634188a6f3a5511e59c5f84 Mon Sep 17 00:00:00 2001
+From: Kalaga <k@k>
+Date: Fri, 27 Nov 2026 22:13:33 -0500
+Subject: [PATCH] watch: how far apart a submission's ranges may lie and still
+ be one asking (VICTORY_ASK_GAP_KB)
+
+Ranges within 8 MiB of each other were one kernel asking, and the pages
+between them were walked too. Which costs more, walking or calling,
+depends on the machine: in the GPU-free frame benchmark on a 4-thread
+runner, 1 MiB walked 1.0 GB a frame instead of 2.6 GB and the frame's
+refreshes went from 18.5-21.0 to 15.6 ms; 16 MiB was slower. The default
+stays 8 MiB; VICTORY_ASK_GAP_KB=<n> (64 KiB-64 MiB) sets it, to measure on
+the machine.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01G6tkVHCftUUQbGm5NirGaG
+---
+ crates/victory-gpu/src/watch.rs | 28 +++++++++++++++++++++++++---
+ 1 file changed, 25 insertions(+), 3 deletions(-)
+
+diff --git a/crates/victory-gpu/src/watch.rs b/crates/victory-gpu/src/watch.rs
+index e511b12..052f763 100644
+--- a/crates/victory-gpu/src/watch.rs
++++ b/crates/victory-gpu/src/watch.rs
+@@ -749,7 +749,29 @@ fn kernel_written(first: usize, last: usize) -> Option<Vec<(usize, u16)>> {
+ /// walking the pages between them costs less than another kernel call (a
+ /// call that resets written pages costs 30-70 microseconds whatever the
+ /// range).
+-const AHEAD_GAP: usize = (8 << 20) / PAGE;
++const AHEAD_GAP_DEFAULT: usize = (8 << 20) / PAGE;
++
++/// How far apart (in pages) a submission's ranges may lie and still be one
++/// asking: [`AHEAD_GAP_DEFAULT`] (8 MiB), or `VICTORY_ASK_GAP_KB=<n>`
++/// (64 KiB to 64 MiB).
++///
++/// The walk is paid per KiB and the call per asking, and which costs more
++/// depends on the machine. In the GPU-free frame benchmark
++/// (`refresh_tests::frame_of_refreshes`, GitHub's 4-thread Windows runner,
++/// asking on one thread) the 8 MiB gap walked 2.6 GB a frame in 713 askings
++/// (6.8-8.3 ms of askings); 1 MiB walked 1.0 GB in 1,098 (4.2 ms), and the
++/// frame's refreshes went from 18.5-21.0 to 15.6 ms; 16 MiB was slower
++/// (5.9 GB, 9.3-10.4 ms). Where a reset costs more per call (more cores to
++/// tell), a wider gap may still win: measure it on the machine.
++fn ahead_gap() -> usize {
++    static GAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
++    *GAP.get_or_init(|| {
++        std::env::var("VICTORY_ASK_GAP_KB")
++            .ok()
++            .and_then(|v| v.trim().parse::<usize>().ok())
++            .map_or(AHEAD_GAP_DEFAULT, |kb| (kb.clamp(64, 64 << 10) << 10) / PAGE)
++    })
++}
+ /// The most one asking covers (its answer needs 8 bytes per 4 KiB page).
+ const AHEAD_MAX: usize = (1 << 30) / PAGE;
+ /// Asks the kernel about many ranges `(start, end)` at once, before the
+@@ -794,7 +816,7 @@ fn ask_ahead_held(ranges: &[(usize, usize)], held: bool) {
+         let mut last = pieces[i].1;
+         let mut k = i + 1;
+         while k < pieces.len()
+-            && pieces[k].0 <= last + AHEAD_GAP
++            && pieces[k].0 <= last + ahead_gap()
+             && last.max(pieces[k].1) - first <= AHEAD_MAX
+         {
+             last = last.max(pieces[k].1);
+@@ -1076,7 +1098,7 @@ pub(crate) fn ask_once(ranges: &[(usize, usize)]) {
+         let mut last = pieces[i].1;
+         let mut k = i + 1;
+         while k < pieces.len()
+-            && pieces[k].0 <= last + AHEAD_GAP
++            && pieces[k].0 <= last + ahead_gap()
+             && last.max(pieces[k].1) - first <= AHEAD_MAX
+         {
+             last = last.max(pieces[k].1);
+-- 
+2.43.0
+

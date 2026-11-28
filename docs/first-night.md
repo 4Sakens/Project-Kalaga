@@ -14,7 +14,7 @@ that and it carries on (finished steps are skipped or quick).
       Anti-Lag on, HYPR-RX **off**, AFMF **off for now** (it skews the test numbers)
 - [ ] Close the browser and anything heavy: the test measures memory too
 
-## What the batch file does (about 45-60 minutes)
+## What the batch file does (about 50-65 minutes)
 
 1. **Updates Kalaga** (`git pull`).
 2. **Clones VIctory-RDNA** into its own folder (default `D:\VIctory-RDNA`; your
@@ -26,7 +26,7 @@ that and it carries on (finished steps are skipped or quick).
    slow on purpose: every pipeline is built as the game asks for it, so later
    runs are smooth. Expect stutter.
 6. **Prepares shaders** for each test preset (a few minutes each).
-7. **Test session**: four presets, 4 minutes each in the world. For each one,
+7. **Test session**: five presets, 4 minutes each in the world (one of them, `rx7600-rdna-askgap`, differs only in how the runtime asks Windows about written memory: same picture, the fps decides). For each one,
    load the same save and stand still in the same spot for the first ~20 seconds
    (that is when the screenshot for the side-by-side is taken), then play
    normally. When it finishes, the best preset is written to `kalaga.toml`.
