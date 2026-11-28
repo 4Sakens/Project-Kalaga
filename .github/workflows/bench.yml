@@ -62,7 +62,8 @@ jobs:
           $configs = [ordered]@{
             'plain' = @()
             'preset' = $preset
-            'preset+NORESET' = $preset + @('VICTORY_ASK_NORESET=1')
+            'preset-no-spread' = ($preset | Where-Object { $_ -notmatch '^VICTORY_ASK_SPREAD=' }) + @('VICTORY_ASK_SPREAD=0')
+            'preset-no-spread-no-wideback' = ($preset | Where-Object { $_ -notmatch '^VICTORY_(ASK_SPREAD|WIDE_BACK)=' })
           }
           if ($env:BENCH_EXTRA) { $configs['preset+extra'] = $preset + ($env:BENCH_EXTRA -split ';') }
           $out = @('### frame_of_refreshes (diagnostics build)', '', '```')
