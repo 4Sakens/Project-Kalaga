@@ -165,6 +165,11 @@ _RDNA_BASE = {
     "VICTORY_CARD_AWAKE": "1",
     "VICTORY_SHOW_AFTER": "1",
     "VICTORY_AMBIENT": "0.8",
+    # Kalaga rdna 0080/0081: reflections whose rays find nothing take the
+    # light estimate along the reflected direction instead of the bright
+    # blue sky (eyes and floors glowing blue indoors); water and glass keep
+    # the title's. foxhound's launcher sets 1. Under 0.15 ms a frame.
+    "VICTORY_AMBIENT_SPECULAR": "1",
     "VICTORY_CARD_BUFFERS_MIN_MB": "1",
 }
 _RDNA_FAST = {
@@ -204,6 +209,8 @@ _RDNA_SAFE = {
     # Kalaga rdna 0066 puts streaming workers below normal; a crash retry
     # runs them as before.
     "VICTORY_DSTORAGE_PRIORITY": "0",
+    # and without the reflections stand-in (new code).
+    "VICTORY_AMBIENT_SPECULAR": "0",
 }
 _RDNA_COMMON = {**_RDNA_BASE, **_THIRTY_TWO_GB, **_PIPELINE_BOOK, **_FEEL}
 

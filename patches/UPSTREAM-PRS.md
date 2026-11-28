@@ -335,3 +335,23 @@ comparison is within one run).
   frame copied, mostly pieces the card wrote landing back through another
   copy of the same memory), `watch::writes` 7-8 ms. Cutting those means
   changing the journal's design; left for game-side profiles.
+
+## Twelfth pass: lighting without rays (2026-11-27 night)
+
+GTA VI ray traces its indirect light (probes, bounce, reflections). The real
+thing (`VICTORY_BVH_BUILDER=1`) costs ~40 ms of a 7900 XTX's time a frame
+and runs at 3-5 fps on the tracker's cards; on an RX 7600 it is out of reach.
+Without it, everything the sun does not reach is black, and VIctory-RDNA's
+stand-in (`VICTORY_AMBIENT=0.8`, on in the presets) estimates that light from
+the frame. From trustno1-coder/VIctory-NVIDIA (readmet3xt-lab and Ahyildiz),
+hand-merged with VIctory-RDNA's band and settling:
+
+| Patch | What it does |
+|---|---|
+| rdna 0078 nvidia-826ba150 | the bluer kind of violet garbage the probes leave is dropped (a purple-blue glow on bright surfaces); the magenta kind was already |
+| rdna 0079 nvidia-8cf0a752 | `VICTORY_AMBIENT_ONCE=1` (off): the stand-in's own light no longer comes back to it, one bounce of the title's light instead of settling 1.3-1.75x brighter (overexposed rooms). The pass's constants grew from 16 to 20 to hold it beside VIctory-RDNA's |
+| rdna 0080 nvidia-2db59d48 | `VICTORY_AMBIENT_SPECULAR=<share>[,<sky>]`: reflections whose rays found nothing took the sky's light, 100-1000x the room and blue (eyes glowing blue-white, blue blotches on floors); now the light estimate along the reflected direction. Screen-space reflections still write over it. Also hooked on VIctory-RDNA's indirect dispatch path, where nothing is held back |
+| rdna 0081 nvidia-9f6fb779 | only opaque surfaces (the alpha layer's depth is what lies behind glass and water: dark patches around boats); `VICTORY_AMBIENT_SPECULAR_ALPHA=1` puts it back |
+
+The rdna presets set `VICTORY_AMBIENT_SPECULAR=1` (as foxhound's launcher);
+the `+safe` crash retry sets it to 0.

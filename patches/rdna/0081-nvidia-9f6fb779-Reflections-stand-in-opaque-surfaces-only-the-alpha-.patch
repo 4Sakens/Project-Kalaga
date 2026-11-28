@@ -1,0 +1,57 @@
+From 269f466f430fa3d0ae8a09336c1419259c597f21 Mon Sep 17 00:00:00 2001
+From: readmet3xt-lab <238408149+readmet3xt-lab@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 02:45:11 +0530
+Subject: [PATCH 81/81] Reflections stand-in: opaque surfaces only; the alpha
+ layer with VICTORY_AMBIENT_SPECULAR_ALPHA=1
+
+Play session 2026-11-27 (open water, the stand-in running every frame once its tables were found): dark ragged
+patches lay on the water around a boat, following it. The alpha layer's rays are of transparent surfaces
+(glass, foam, wakes), but the depth the stand-in reads is the opaque one behind them: on water, the bottom. The
+normal and the reflected direction made of it are wrong and the estimate dark. The alpha layer is now left as
+the title has it (sky light), as water already was; VICTORY_AMBIENT_SPECULAR_ALPHA=1 puts it back for interiors.
+Counted with water on the 10-s line.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+(cherry picked from commit 9f6fb7790d7c27988a4171acc70fb3229abcc5ff)
+---
+ crates/victory-gpu/src/ambient.rs |  2 +-
+ crates/victory-gpu/src/draw.rs    | 10 +++++++++-
+ 2 files changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/crates/victory-gpu/src/ambient.rs b/crates/victory-gpu/src/ambient.rs
+index a2ecaf1..4b1e813 100644
+--- a/crates/victory-gpu/src/ambient.rs
++++ b/crates/victory-gpu/src/ambient.rs
+@@ -817,7 +817,7 @@ pub(crate) fn note_miss(note: MissNote) {
+     tracing::info!(
+         "a stand-in for reflections (VICTORY_AMBIENT_SPECULAR={share},{sky}) in the last {:.0} s: \
+          {} frames, {} dispatches of CS_RayMiss followed (surfaces: {}), each by an estimate along \
+-         the reflected direction put in right after it (before CS_ResolveScreenSpace); {} of water \
++         the reflected direction put in right after it (before CS_ResolveScreenSpace); {} of water or the alpha layer \
+          and {} before a frame's light was kept left as the title had them",
+         now.duration_since(since).as_secs_f32(),
+         s.frames.swap(0, Relaxed),
+diff --git a/crates/victory-gpu/src/draw.rs b/crates/victory-gpu/src/draw.rs
+index 0a1545c..a7d60bb 100644
+--- a/crates/victory-gpu/src/draw.rs
++++ b/crates/victory-gpu/src/draw.rs
+@@ -3147,7 +3147,15 @@ impl State {
+                 .unwrap_or(u32::MAX),
+             _ => 0,
+         };
+-        if role == Role::Miss && !matches!(layer, crate::ambient::MISS_OPAQUE | crate::ambient::MISS_ALPHA) {
++        // The alpha layer only with VICTORY_AMBIENT_SPECULAR_ALPHA=1: its pixels
++        // are of transparent surfaces (glass, foam, wakes on water) and the
++        // depth read is the opaque one behind them; outdoors on water that is
++        // the bottom, the reflected direction is wrong and the estimate dark
++        // (play session 2026-11-27: dark patches on the water around a boat).
++        let alpha_too = std::env::var("VICTORY_AMBIENT_SPECULAR_ALPHA").is_ok_and(|v| v.trim() == "1");
++        if role == Role::Miss
++            && !(layer == crate::ambient::MISS_OPAQUE || (alpha_too && layer == crate::ambient::MISS_ALPHA))
++        {
+             crate::ambient::note_miss(MissNote::Water);
+             return false;
+         }
+-- 
+2.43.0
+
