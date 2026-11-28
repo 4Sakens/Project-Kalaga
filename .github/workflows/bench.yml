@@ -57,20 +57,25 @@ jobs:
         working-directory: runtime
         shell: pwsh
         run: |
-          $out = @('### frame_of_refreshes', '', '```')
-          foreach ($feat in @('', 'diagnostics')) {
-            $f = if ($feat) { @('--features', $feat) } else { @() }
-            cargo test --release --locked -p victory-gpu --lib @f --no-run 2>&1 | Select-Object -Last 2
-            foreach ($run in 1..3) {
-              $lines = cargo test --release --locked -p victory-gpu --lib @f -- --ignored --nocapture --test-threads=1 frame_of_refreshes 2>&1 | ForEach-Object { "$_" }
-              $out += "-- features '$feat' run $run"
-              $out += $lines | Where-Object { $_ -match 'VICTORY_LIGHT_REFRESH|BENCH|per frame|panicked|error' }
-            }
+          # The rx7600-rdna preset's switches, as Kalaga sets them.
+          $preset = python -c "import sys; sys.path.insert(0, '../kalaga'); from kalaga import presets; [print(f'{k}={v}') for k, v in presets.environment(presets.get('rx7600-rdna')).items()]"
+          $configs = [ordered]@{
+            'plain' = @()
+            'preset' = $preset
+            'preset+NORESET' = $preset + @('VICTORY_ASK_NORESET=1')
           }
-          foreach ($t in @('texture_checks_per_submission', 'pass_overhead')) {
-            $lines = cargo test --release --locked -p victory-gpu --lib -- --ignored --nocapture --test-threads=1 $t 2>&1 | ForEach-Object { "$_" }
-            $out += "-- $t"
-            $out += $lines | Where-Object { $_ -match '^test .*\.\.\. .+' -or $_ -match 'helpers hot' }
+          if ($env:BENCH_EXTRA) { $configs['preset+extra'] = $preset + ($env:BENCH_EXTRA -split ';') }
+          $out = @('### frame_of_refreshes (diagnostics build)', '', '```')
+          cargo test --release --locked -p victory-gpu --lib --features diagnostics --no-run 2>&1 | Select-Object -Last 1
+          foreach ($name in $configs.Keys) {
+            $saved = @{}
+            foreach ($kv in $configs[$name]) { $k, $v = $kv -split '=', 2; $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $v) }
+            foreach ($run in 1..2) {
+              $lines = cargo test --release --locked -p victory-gpu --lib --features diagnostics -- --ignored --nocapture --test-threads=1 frame_of_refreshes 2>&1 | ForEach-Object { "$_" }
+              $out += "-- $name run $run"
+              $out += $lines | Where-Object { $_ -match 'VICTORY_LIGHT_REFRESH|BENCH|per frame|panicked|error\[' }
+            }
+            foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
           }
           $out += '```'
           $out | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
