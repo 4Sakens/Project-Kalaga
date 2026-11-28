@@ -1,0 +1,52 @@
+# Builds and tests 4Sakens/victory-fork's PR branches beside fxceless/main,
+# so failures that are upstream's own show on both.
+name: fxcheck
+on:
+  push:
+    branches: [fxcheck]
+permissions:
+  contents: read
+jobs:
+  check:
+    name: ${{ matrix.ref }}
+    runs-on: windows-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { repo: fxceless/victory-fork, ref: main }
+          - { repo: 4Sakens/victory-fork, ref: pr/texture-sweep }
+          - { repo: 4Sakens/victory-fork, ref: pr/dstorage-priority }
+          - { repo: 4Sakens/victory-fork, ref: pr/ask-gap }
+          - { repo: 4Sakens/victory-fork, ref: pr/lds-first-init }
+    env:
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Fetch
+        shell: pwsh
+        run: |
+          git init -q src
+          git -C src config core.autocrlf false
+          git -C src fetch -q --depth 1 https://github.com/${{ matrix.repo }} ${{ matrix.ref }}
+          git -C src checkout -q FETCH_HEAD
+          "$(git -C src log -1 --format='%h %s')" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+      - name: Toolchain
+        working-directory: src
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src
+          key: fxcheck
+      - name: Build
+        working-directory: src
+        run: cargo build --locked --release -p victory
+      - name: Tests
+        working-directory: src
+        shell: pwsh
+        run: |
+          cargo test --workspace --locked --no-fail-fast 2>&1 | Tee-Object -FilePath ../tests.log | Select-String -Pattern '^test result|FAILED|panicked' | Select-Object -Last 60
+          $failed = Select-String -Path ../tests.log -Pattern '^test (\S+) \.\.\. FAILED' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Sort-Object -Unique
+          "Failed tests ($($failed.Count)):" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          $failed | ForEach-Object { "- $_" } | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+          exit 0
