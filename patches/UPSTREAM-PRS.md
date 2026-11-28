@@ -355,3 +355,21 @@ hand-merged with VIctory-RDNA's band and settling:
 
 The rdna presets set `VICTORY_AMBIENT_SPECULAR=1` (as foxhound's launcher);
 the `+safe` crash retry sets it to 0.
+
+## Thirteenth pass: RAM (2026-11-28 early)
+
+rdna 0082 **foxhound-prelude-pool**: every host list kept its own "prelude"
+(an allocator and a small list for the state changes before it) for as long
+as the list lived: 1,140 alive in foxhound's 25-minute run, about 2.9 MB of
+the PC's memory each in the driver (some 3.3 GB). They are now taken from a
+pool while a submission runs and given back at the list's reset; about 190
+stay alive. `VICTORY_PRELUDE_POOL=0` turns it off, which the `+safe` retry
+does. Hand-ported: VIctory-RDNA takes a prelude in two places.
+
+Looked at and not done: detiling textures on the card instead of the CPU.
+Timed here with victory-formats' own `Layout::detile` (no game needed):
+for real-sized textures it runs at 1.2-1.6x a plain memory copy (2048x2048
+BC7 64KB_S: 0.50 ms against 0.40 ms), so moving it to the GPU saves little
+while the CPU still copies the bytes into an upload buffer. What would pay
+is the card reading the title's texture memory in place (no CPU copy, no
+staging RAM), which needs the game running to build and check.

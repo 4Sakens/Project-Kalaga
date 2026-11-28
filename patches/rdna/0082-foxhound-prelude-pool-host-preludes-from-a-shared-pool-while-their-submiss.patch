@@ -1,0 +1,197 @@
+From 2b64df383059109d2b5595fe4dfff04d6731bc68 Mon Sep 17 00:00:00 2001
+From: 4Sakens <4Sakens@users.noreply.github.com>
+Date: Fri, 27 Nov 2026 23:36:44 -0500
+Subject: [PATCH] host: preludes from a shared pool while their submission runs
+ (VICTORY_PRELUDE_POOL)
+
+Each host list kept its own prelude (an allocator and a list for the
+transitions before it) from its first submission that needed one until
+the list went: 1,140 alive in foxhound's 25-minute run, each pair about
+2.9 MB of the PC's memory in the driver. A prelude is used only while
+its list's submission runs, so a list now takes one from a pool then
+and gives it back at its reset (or when its recycled list is not kept);
+the lists in the air hold theirs, about 190. The pool keeps 256 at most.
+VICTORY_PRELUDE_POOL=0: each list keeps its own, as before.
+
+From readmet3xt-lab/foxhound 0.2.0-pre.4; VIctory-RDNA takes a prelude
+in two places, both from the pool here.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01G6tkVHCftUUQbGm5NirGaG
+---
+ crates/victory-gpu/src/host.rs | 90 ++++++++++++++++++++++++++++------
+ crates/victory-gpu/src/list.rs |  7 ++-
+ 2 files changed, 80 insertions(+), 17 deletions(-)
+
+diff --git a/crates/victory-gpu/src/host.rs b/crates/victory-gpu/src/host.rs
+index ad1e09e..ed8d3e8 100644
+--- a/crates/victory-gpu/src/host.rs
++++ b/crates/victory-gpu/src/host.rs
+@@ -1361,9 +1361,10 @@ pub(crate) struct HostList {
+     /// What the list does with depth textures that have a colour twin, by
+     /// twin ([`TwinUse`]).
+     twins: Mutex<std::collections::HashMap<usize, TwinUse>>,
+-    /// The list that runs those transitions just before this one, made
+-    /// when the list first has such transitions ([`lazy_prelude`]).
+-    prelude: OnceLock<Option<Prelude>>,
++    /// The list that runs those transitions just before this one: taken
++    /// from [`PRELUDES`] when a submission of the list first needs one, given
++    /// back when the list is reset (every submission of it has run).
++    prelude: Mutex<Option<Prelude>>,
+     /// The pipelines the list binds, for reports of slow submissions.
+     pipelines: std::sync::Arc<Mutex<std::collections::BTreeSet<String>>>,
+     /// What its indirect executions ran, for the report of a removed device.
+@@ -1405,6 +1406,43 @@ pub(crate) struct HostList {
+ /// A list's prelude: an allocator and a closed list.
+ type Prelude = (ID3D12CommandAllocator, ID3D12GraphicsCommandList);
+ 
++/// Preludes no list holds. Each host list kept its own from its first
++/// submission that needed one until the list went: 1,140 alive in a
++/// 25-minute run (foxhound's leak3), beside 1,526 lists, each pair of an
++/// allocator and a list costing the driver about 2.9 MB of the PC's memory
++/// at creation. A prelude is used only while its list's submission runs, so
++/// a list takes one then and gives it back at its reset; the lists in the
++/// air hold theirs (about 190). `VICTORY_PRELUDE_POOL=0`: each list keeps its
++/// own, as before. From readmet3xt-lab/foxhound 0.2.0-pre.4.
++static PRELUDES: Mutex<Vec<Prelude>> = Mutex::new(Vec::new());
++
++impl Drop for HostList {
++    fn drop(&mut self) {
++        if self.prelude.get_mut().unwrap_or_else(|e| e.into_inner()).is_some() {
++            PRELUDES_ALIVE.fetch_sub(1, Ordering::Relaxed);
++        }
++    }
++}
++
++/// The most preludes [`PRELUDES`] keeps.
++const PRELUDES_KEPT: usize = 256;
++
++fn prelude_pool() -> bool {
++    static ON: OnceLock<bool> = OnceLock::new();
++    *ON.get_or_init(|| std::env::var_os("VICTORY_PRELUDE_POOL").is_none_or(|v| v != "0"))
++}
++
++/// Preludes alive (held by a list or kept).
++pub(crate) static PRELUDES_ALIVE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++
++/// A prelude for a list that has none: one kept in [`PRELUDES`], else a new one.
++fn take_prelude(held: &mut Option<Prelude>) {
++    if held.is_none() {
++        let kept = if prelude_pool() { PRELUDES.lock().unwrap_or_else(|e| e.into_inner()).pop() } else { None };
++        *held = kept.or_else(|| host().and_then(|h| h.make_prelude()));
++    }
++}
++
+ /// Whether a host list's prelude is made when the list first needs one. A
+ /// prelude runs the texture transitions and twin copies a list needs before
+ /// it; lists that name no texture never have one, and every host list was
+@@ -4369,7 +4407,10 @@ impl Host {
+         };
+         LISTS[1].fetch_add(1, Ordering::Relaxed);
+         match made {
+-            Ok(prelude) => Some(prelude),
++            Ok(prelude) => {
++                PRELUDES_ALIVE.fetch_add(1, Ordering::Relaxed);
++                Some(prelude)
++            }
+             Err(e) => {
+                 tracing::warn!(error = %e, "no host list for a prelude");
+                 None
+@@ -4389,9 +4430,9 @@ impl Host {
+                 &allocator,
+                 None,
+             )?;
+-            let prelude = OnceLock::new();
++            let prelude = Mutex::new(None);
+             if !lazy_prelude() {
+-                let _ = prelude.set(self.make_prelude());
++                *prelude.lock().unwrap_or_else(|e| e.into_inner()) = self.make_prelude();
+             }
+             #[cfg(feature = "diagnostics")]
+             let notes = std::sync::Arc::<Mutex<Vec<Note>>>::default();
+@@ -6767,6 +6808,25 @@ impl HostList {
+ 
+     /// Only after the list's last submission finished (every one is waited
+     /// for).
++    /// Its prelude to [`PRELUDES`] (or gone, past [`PRELUDES_KEPT`]). Only
++    /// after the list's last submission finished.
++    pub(crate) fn give_prelude(&self) {
++        if !prelude_pool() {
++            return;
++        }
++        let Some(prelude) = self.prelude.lock().unwrap_or_else(|e| e.into_inner()).take() else {
++            return;
++        };
++        let mut kept = PRELUDES.lock().unwrap_or_else(|e| e.into_inner());
++        if kept.len() < PRELUDES_KEPT {
++            kept.push(prelude);
++        } else {
++            drop(kept);
++            drop(prelude);
++            PRELUDES_ALIVE.fetch_sub(1, Ordering::Relaxed);
++        }
++    }
++
+     pub(crate) fn reset(&self) {
+         self.changed_something();
+         #[cfg(feature = "diagnostics")]
+@@ -6791,6 +6851,8 @@ impl HostList {
+                 give_chunks(std::mem::take(&mut scratch.chunks));
+             }
+         }
++        // Nor runs its prelude: the next submission to need one takes it.
++        self.give_prelude();
+         {
+             let mut args = self.batch_args.lock().unwrap_or_else(|e| e.into_inner());
+             let left = std::mem::take(&mut args.1);
+@@ -7129,11 +7191,9 @@ impl HostList {
+             if barriers.is_empty() {
+                 return None;
+             }
+-            let Some((allocator, list)) = self
+-                .prelude
+-                .get_or_init(|| host().and_then(|h| h.make_prelude()))
+-                .as_ref()
+-            else {
++            let mut held = self.prelude.lock().unwrap_or_else(|e| e.into_inner());
++            take_prelude(&mut held);
++            let Some((allocator, list)) = held.as_ref() else {
+                 fail(format_args!("no host list for a state prelude"));
+             };
+             // SAFETY: the prelude is not executing; the textures are live.
+@@ -7228,11 +7288,9 @@ impl HostList {
+         if barriers.is_empty() && syncs.is_empty() && uploads.is_empty() {
+             return None;
+         }
+-        let Some((allocator, list)) = self
+-            .prelude
+-            .get_or_init(|| host().and_then(|h| h.make_prelude()))
+-            .as_ref()
+-        else {
++        let mut held = self.prelude.lock().unwrap_or_else(|e| e.into_inner());
++        take_prelude(&mut held);
++        let Some((allocator, list)) = held.as_ref() else {
+             fail(format_args!("no host list for a state prelude"));
+         };
+         // SAFETY: the prelude is not executing (every submission is waited
+diff --git a/crates/victory-gpu/src/list.rs b/crates/victory-gpu/src/list.rs
+index f45beae..9ddda5f 100644
+--- a/crates/victory-gpu/src/list.rs
++++ b/crates/victory-gpu/src/list.rs
+@@ -340,7 +340,12 @@ pub(crate) fn recycle(lists: Vec<Detached>, ran: &[usize]) {
+         // The descriptor slots and the upload memory its commands named.
+         drop(_state);
+         drop(_uploads);
+-        if !ran.contains(&i) || IDLE.lock().unwrap_or_else(|e| e.into_inner()).lists.len() >= idle_most() {
++        if !ran.contains(&i) {
++            continue;
++        }
++        if IDLE.lock().unwrap_or_else(|e| e.into_inner()).lists.len() >= idle_most() {
++            // Its submission has run: its prelude serves another list.
++            host.give_prelude();
+             continue;
+         }
+         // As the title's reset does: what the list kept for its commands
+-- 
+2.43.0
+

@@ -211,6 +211,8 @@ _RDNA_SAFE = {
     "VICTORY_DSTORAGE_PRIORITY": "0",
     # and without the reflections stand-in (new code).
     "VICTORY_AMBIENT_SPECULAR": "0",
+    # and each list keeping its own prelude (rdna 0082 pools them).
+    "VICTORY_PRELUDE_POOL": "0",
 }
 _RDNA_COMMON = {**_RDNA_BASE, **_THIRTY_TWO_GB, **_PIPELINE_BOOK, **_FEEL}
 
