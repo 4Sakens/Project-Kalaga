@@ -1,0 +1,51 @@
+From 8b22c32973363a50c6eb63d58816098b003017c6 Mon Sep 17 00:00:00 2001
+From: kalaga <k@k>
+Date: Fri, 27 Nov 2026 22:06:31 -0500
+Subject: [PATCH] bench: VICTORY_ASK_GAP_KB
+
+---
+ crates/victory-gpu/src/watch.rs | 14 +++++++++++---
+ 1 file changed, 11 insertions(+), 3 deletions(-)
+
+diff --git a/crates/victory-gpu/src/watch.rs b/crates/victory-gpu/src/watch.rs
+index e511b12..208eab1 100644
+--- a/crates/victory-gpu/src/watch.rs
++++ b/crates/victory-gpu/src/watch.rs
+@@ -749,7 +749,15 @@ fn kernel_written(first: usize, last: usize) -> Option<Vec<(usize, u16)>> {
+ /// walking the pages between them costs less than another kernel call (a
+ /// call that resets written pages costs 30-70 microseconds whatever the
+ /// range).
+-const AHEAD_GAP: usize = (8 << 20) / PAGE;
++const AHEAD_GAP_DEFAULT: usize = (8 << 20) / PAGE;
++/// [`AHEAD_GAP_DEFAULT`], or `VICTORY_ASK_GAP_KB=<n>` (bench: how far apart ranges may lie and
++/// still be one asking).
++fn ahead_gap() -> usize {
++    static GAP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
++    *GAP.get_or_init(|| {
++        std::env::var("VICTORY_ASK_GAP_KB").ok().and_then(|v| v.trim().parse::<usize>().ok()).map_or(AHEAD_GAP_DEFAULT, |kb| (kb << 10) / PAGE)
++    })
++}
+ /// The most one asking covers (its answer needs 8 bytes per 4 KiB page).
+ const AHEAD_MAX: usize = (1 << 30) / PAGE;
+ /// Asks the kernel about many ranges `(start, end)` at once, before the
+@@ -794,7 +802,7 @@ fn ask_ahead_held(ranges: &[(usize, usize)], held: bool) {
+         let mut last = pieces[i].1;
+         let mut k = i + 1;
+         while k < pieces.len()
+-            && pieces[k].0 <= last + AHEAD_GAP
++            && pieces[k].0 <= last + ahead_gap()
+             && last.max(pieces[k].1) - first <= AHEAD_MAX
+         {
+             last = last.max(pieces[k].1);
+@@ -1076,7 +1084,7 @@ pub(crate) fn ask_once(ranges: &[(usize, usize)]) {
+         let mut last = pieces[i].1;
+         let mut k = i + 1;
+         while k < pieces.len()
+-            && pieces[k].0 <= last + AHEAD_GAP
++            && pieces[k].0 <= last + ahead_gap()
+             && last.max(pieces[k].1) - first <= AHEAD_MAX
+         {
+             last = last.max(pieces[k].1);
+-- 
+2.43.0
+
