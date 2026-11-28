@@ -1,0 +1,76 @@
+# Speed experiments on the patched VIctory-RDNA: the series, then
+# bench/patches/*.patch, then the runtime's GPU-free frame benchmark
+# (frame_of_refreshes) a few times, with and without its diagnostics counters.
+name: Bench
+on:
+  push:
+    branches: [bench]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: bench
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: never
+jobs:
+  bench:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          path: kalaga
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Patched runtime and experiments
+        shell: pwsh
+        run: |
+          $meta = Get-Content "kalaga/patches/rdna/UPSTREAM.toml" -Raw
+          $repo = [regex]::Match($meta, 'repo\s*=\s*"([^"]+)"').Groups[1].Value
+          $commit = [regex]::Match($meta, 'commit\s*=\s*"([^"]+)"').Groups[1].Value
+          git init -q runtime
+          git -C runtime config core.autocrlf false
+          git -C runtime config user.name bench
+          git -C runtime config user.email bench@localhost
+          git -C runtime fetch -q --depth 1 $repo $commit
+          git -C runtime checkout -q FETCH_HEAD
+          cd kalaga
+          python -m kalaga patches --runtime rdna --dir ../runtime --strict | Select-Object -Last 1
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          cd ..
+          $exp = Get-ChildItem kalaga/bench/patches/*.patch | Sort-Object Name
+          foreach ($p in $exp) {
+            git -C runtime am --keep-cr $p.FullName
+            if ($LASTEXITCODE -ne 0) { "experiment $($p.Name) did not apply"; exit 1 }
+          }
+          "Experiments: $(($exp | ForEach-Object Name) -join ', ')" | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+      - name: Rust toolchain
+        working-directory: runtime
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: runtime
+          key: bench
+      - name: Frame benchmark
+        working-directory: runtime
+        shell: pwsh
+        run: |
+          $out = @('### frame_of_refreshes', '', '```')
+          foreach ($feat in @('', 'diagnostics')) {
+            $f = if ($feat) { @('--features', $feat) } else { @() }
+            cargo test --release --locked -p victory-gpu --lib @f --no-run 2>&1 | Select-Object -Last 2
+            foreach ($run in 1..3) {
+              $lines = cargo test --release --locked -p victory-gpu --lib @f -- --ignored --nocapture --test-threads=1 frame_of_refreshes 2>&1 | ForEach-Object { "$_" }
+              $out += "-- features '$feat' run $run"
+              $out += $lines | Where-Object { $_ -match 'VICTORY_LIGHT_REFRESH|BENCH|per frame|panicked|error' }
+            }
+          }
+          foreach ($t in @('texture_checks_per_submission', 'pass_overhead')) {
+            $lines = cargo test --release --locked -p victory-gpu --lib -- --ignored --nocapture --test-threads=1 $t 2>&1 | ForEach-Object { "$_" }
+            $out += "-- $t"
+            $out += $lines | Where-Object { $_ -match '^test .*\.\.\. .+' -or $_ -match 'helpers hot' }
+          }
+          $out += '```'
+          $out | Tee-Object -Append $env:GITHUB_STEP_SUMMARY

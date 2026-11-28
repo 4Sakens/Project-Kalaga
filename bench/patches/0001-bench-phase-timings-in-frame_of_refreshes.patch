@@ -1,0 +1,66 @@
+From 1b640a04bfbd73225efb3209b987789d14702425 Mon Sep 17 00:00:00 2001
+From: kalaga <k@k>
+Date: Fri, 27 Nov 2026 21:25:30 -0500
+Subject: [PATCH] bench: phase timings in frame_of_refreshes
+
+---
+ crates/victory-gpu/src/host.rs | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/crates/victory-gpu/src/host.rs b/crates/victory-gpu/src/host.rs
+index ad1e09e..67ef160 100644
+--- a/crates/victory-gpu/src/host.rs
++++ b/crates/victory-gpu/src/host.rs
+@@ -10949,6 +10949,8 @@ mod spare {
+ #[cfg(test)]
+ mod refresh_tests {
+     use super::Batch;
++    use super::PREPARING;
++    use std::sync::atomic::Ordering;
+     use crate::shadow::Shadow;
+     use std::sync::Arc;
+     use windows_sys::Win32::System::Memory::{
+@@ -11047,8 +11049,10 @@ mod refresh_tests {
+         // One at a time, as submissions are.
+         static ONE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+         let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
++        let t0 = std::time::Instant::now();
+         let asked: Vec<(usize, usize)> = ranges.iter().filter(|r| !r.0.unwatched()).map(|r| (r.1, r.1 + r.2)).collect();
+         crate::watch::ask_once(&asked);
++        let t1 = std::time::Instant::now();
+         let mut batch = Batch::default();
+         for part in ranges.chunks(ranges.len().div_ceil(flushes).max(1)) {
+             for (shadow, at, len) in part {
+@@ -11056,9 +11060,18 @@ mod refresh_tests {
+             }
+             batch.flush();
+         }
++        let t2 = std::time::Instant::now();
+         crate::watch::ask_once_end();
++        let t3 = std::time::Instant::now();
++        let ns = |a: std::time::Instant, b: std::time::Instant| b.duration_since(a).as_nanos() as u64;
++        BENCH_PHASES[0].fetch_add(ns(t0, t1), Ordering::Relaxed);
++        BENCH_PHASES[1].fetch_add(ns(t1, t2), Ordering::Relaxed);
++        BENCH_PHASES[2].fetch_add(ns(t2, t3), Ordering::Relaxed);
+     }
+ 
++    /// Bench breakdown of [`submission`]: asking, adds and flushes, the asking's end (ns).
++    static BENCH_PHASES: [std::sync::atomic::AtomicU64; 3] = [const { std::sync::atomic::AtomicU64::new(0) }; 3];
++
+     /// Whatever is written where, by the title or by us, and whichever
+     /// copies (of both kinds of memory, over one another, none on a page
+     /// line) are refreshed in which ranges: a refreshed range holds what
+@@ -11599,6 +11612,10 @@ mod refresh_tests {
+             best[1],
+             landing / (FRAMES - 2) as f64,
+         );
++        let ph: Vec<f64> = BENCH_PHASES.iter().map(|p| p.load(Ordering::Relaxed) as f64 / 1e6 / FRAMES as f64).collect();
++        println!("BENCH phases per frame (ms): ask_once {:.2}, adds+flushes {:.2}, ask_once_end {:.2}", ph[0], ph[1], ph[2]);
++        let pr = PREPARING[0].load(Ordering::Relaxed) as f64 / 1e3 / FRAMES as f64;
++        println!("BENCH PREPARING[0] per frame (ms, update time as counted): {pr:.2}; bytes copied per frame {}", PREPARING[1].load(Ordering::Relaxed) / FRAMES as u64);
+         #[cfg(feature = "diagnostics")]
+         println!("per frame, as `crate::watch::asks`: {:?}", crate::watch::asks().map(|n| n / FRAMES as u64));
+     }
+-- 
+2.43.0
+
