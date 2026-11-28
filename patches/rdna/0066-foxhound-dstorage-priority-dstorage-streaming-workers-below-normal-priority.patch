@@ -1,0 +1,97 @@
+From 1fc320246c86d2176d15962f4883d55bc870a056 Mon Sep 17 00:00:00 2001
+From: kalaga <kalaga@localhost>
+Date: Fri, 27 Nov 2026 20:15:34 -0500
+Subject: [PATCH 66/67] dstorage: streaming workers below normal priority
+
+While a scene streams in, every streaming worker (as many as there are
+processors) unpacks at once, beside the threads that build the frame,
+and those stood woken but not running for a good part of each frame
+(9.5 ms a frame in foxhound's crowded cutscene). The workers now run
+below normal (VICTORY_DSTORAGE_PRIORITY=-1, -2..2, 0: as before), so
+they take what the frame's threads leave; the process runs above
+normal, so they still come before other programs. VICTORY_DSTORAGE_WORKERS
+sets how many (1-64; default the processors).
+
+After readmet3xt-lab/foxhound (dstorage.rs, 2026-11-27).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01G6tkVHCftUUQbGm5NirGaG
+---
+ crates/victory-hle/src/modules/dstorage.rs | 40 +++++++++++++++++++---
+ 1 file changed, 36 insertions(+), 4 deletions(-)
+
+diff --git a/crates/victory-hle/src/modules/dstorage.rs b/crates/victory-hle/src/modules/dstorage.rs
+index 020dd128..90b94c30 100644
+--- a/crates/victory-hle/src/modules/dstorage.rs
++++ b/crates/victory-hle/src/modules/dstorage.rs
+@@ -312,6 +312,18 @@ impl Io {
+     const DEFAULT: Io = Io::Handles;
+ }
+ 
++/// How many streaming workers run: `VICTORY_DSTORAGE_WORKERS=<n>` (1 to 64),
++/// else as many as processors. Also the number of per-worker file handles.
++fn worker_count() -> usize {
++    static N: OnceLock<usize> = OnceLock::new();
++    *N.get_or_init(|| {
++        match std::env::var("VICTORY_DSTORAGE_WORKERS").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
++            Some(n) if n > 0 => n.min(64),
++            _ => std::thread::available_parallelism().map_or(4, |n| n.get()),
++        }
++    })
++}
++
+ /// A file as the workers read it: the handle the title opened, and those
+ /// made from it when a worker first reads.
+ struct Files {
+@@ -322,7 +334,7 @@ struct Files {
+ 
+ impl Files {
+     fn new(first: std::fs::File, io: Io) -> Files {
+-        let workers = std::thread::available_parallelism().map_or(4, |n| n.get());
++        let workers = worker_count();
+         let others = match io {
+             Io::One => 0,
+             Io::Overlapped => 1,
+@@ -628,16 +640,36 @@ fn scheduler() -> Option<&'static Scheduler> {
+         })
+         .as_ref()?;
+     STARTED.call_once(|| {
+-        let workers = std::thread::available_parallelism().map_or(4, |n| n.get());
++        // As many workers as processors (`VICTORY_DSTORAGE_WORKERS=<n>`: that
++        // many), below normal priority (`VICTORY_DSTORAGE_PRIORITY=<-2..2>`,
++        // 0: normal, as before). While a scene streams in, all of them unpack
++        // at once: in a crowded cutscene (62 ms a frame) 16 workers ran 10 ms
++        // a frame each beside 8 listing threads of 20 ms, and the threads a
++        // frame waits for stood woken but not running for 9.5 ms of each
++        // frame's chain (readmet3xt-lab/foxhound). Below them in priority the
++        // workers take the processors nobody of the frame wants; the process
++        // runs above normal (`runtime::ahead_of_other_programs`), so they
++        // still come before other programs' threads. More so on 6 cores.
++        let number = |name: &str| std::env::var(name).ok().and_then(|v| v.trim().parse::<i32>().ok());
++        let workers = worker_count();
++        let priority = number("VICTORY_DSTORAGE_PRIORITY").map_or(-1, |p| p.clamp(-2, 2));
+         let started = (0..workers)
+             .filter(|i| {
+                 std::thread::Builder::new()
+                     .name(format!("dstorage {i}"))
+-                    .spawn(|| work(scheduler))
++                    .spawn(move || {
++                        #[cfg(windows)]
++                        if priority != 0 {
++                            use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority};
++                            // SAFETY: this thread's own priority.
++                            unsafe { SetThreadPriority(GetCurrentThread(), priority) };
++                        }
++                        work(scheduler)
++                    })
+                     .is_ok()
+             })
+             .count();
+-        tracing::info!(workers = started, "dstorage: workers");
++        tracing::info!(workers = started, priority, "dstorage: workers (VICTORY_DSTORAGE_WORKERS, VICTORY_DSTORAGE_PRIORITY)");
+     });
+     Some(scheduler)
+ }
+-- 
+2.43.0
+

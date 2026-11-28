@@ -221,6 +221,34 @@ jobs:
           cargo test --workspace --locked -- --exact @skip
           exit $LASTEXITCODE
 
+      # The runtime's own timing tests that need no game and no graphics card
+      # (ignored by default), on the bare and the patched tree: a patch that
+      # makes the CPU side of a frame slower shows up here before a PC run.
+      # Runner numbers are noisy (shared machines): compare bare and patched
+      # of the same run, and look for large gaps only.
+      - name: Speed tests (timings, not fatal)
+        if: always() && steps.fetch.outputs.available == 'true' && matrix.runtime == 'rdna' && (matrix.leg == 'patched' || matrix.leg == 'bare')
+        continue-on-error: true
+        timeout-minutes: 40
+        working-directory: runtime
+        shell: pwsh
+        run: |
+          $names = @('bytes_under_overlapping_ranges', 'frame_of_refreshes', 'texture_checks_per_submission',
+                     'spans_of_a_pass', 'copy_costs', 'pass_overhead')
+          $out = @("### Speed tests: rdna ${{ matrix.leg }}", '', '```')
+          cargo test --release --locked -p victory-gpu --lib --no-run 2>&1 | Out-Null
+          foreach ($n in $names) {
+            $lines = cargo test --release --locked -p victory-gpu --lib -- --ignored --nocapture --test-threads=1 $n 2>&1
+            $kept = $lines | ForEach-Object { "$_" } | Where-Object {
+              $_ -and $_ -notmatch '^(running \d+ tests?|test result:|\s+(Compiling|Finished|Running)|warning:|\s*$)' -and $_ -notmatch '^test .* \.\.\. ok$'
+            }
+            if ($lines -match 'running 0 tests') { $out += "$n`: not in this tree" ; continue }
+            $out += "== $n"
+            $out += $kept | Select-Object -First 25
+          }
+          $out += '```'
+          $out | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+
       - name: Clippy (warnings shown, not fatal)
         if: always() && steps.fetch.outputs.available == 'true' && matrix.leg != 'gnu'
         working-directory: runtime

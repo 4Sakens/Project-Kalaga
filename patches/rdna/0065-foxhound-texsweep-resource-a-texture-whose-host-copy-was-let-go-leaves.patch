@@ -1,0 +1,43 @@
+From 206fdb50610beeb6629c44c95563f54204bac3ab Mon Sep 17 00:00:00 2001
+From: kalaga <kalaga@localhost>
+Date: Fri, 27 Nov 2026 20:14:47 -0500
+Subject: [PATCH 65/67] resource: a texture whose host copy was let go leaves
+ the sweeps until used again
+
+let_go_idle let a texture's host copy go but kept its last-use stamp,
+so it stayed idle for good: every sweep over the line sorted it and took
+its lock, finding nothing to let go. The longer a session ran, the more
+there were and the longer each sweep took (3 ms after a minute, 14 ms
+after 30 minutes in foxhound's measurements, with lag and stuttering
+sound). The stamp is cleared there; the next use stamps it again under
+the same lock, and the sweeps already pass stamp 0 by.
+
+After readmet3xt-lab/foxhound 0.2.0-pre.4 (issue #12).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01G6tkVHCftUUQbGm5NirGaG
+---
+ crates/victory-gpu/src/resource.rs | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/crates/victory-gpu/src/resource.rs b/crates/victory-gpu/src/resource.rs
+index a7473d8a..abd8a552 100644
+--- a/crates/victory-gpu/src/resource.rs
++++ b/crates/victory-gpu/src/resource.rs
+@@ -2240,6 +2240,13 @@ pub(crate) fn let_go_idle() {
+                 // state of the texture let go (it says "uploaded").
+                 crate::texture::unstage(at as This);
+                 r.host.wanted.store(u32::MAX, Relaxed);
++                // Not used since: the sweeps pass it by (`used == 0`) until a
++                // use makes its copy again and stamps it, under this lock.
++                // Kept, it stayed "idle" for good and every sweep sorted it
++                // and took its lock, finding nothing to let go: the more a
++                // session had let go, the longer each sweep (3 ms a sweep
++                // after a minute, 14 ms after 30: readmet3xt-lab/foxhound #12).
++                r.host.used.store(0, Relaxed);
+                 made.take()
+             } else {
+                 None
+-- 
+2.43.0
+

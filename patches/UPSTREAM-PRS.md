@@ -252,3 +252,28 @@ Looked at, not taken:
 - **Open water without dark blocks** (35c15608): the two water light programs
   go dark only in the wave-wide form a 32-lane host needs. VIctory-RDNA on a
   Radeon declares their wave size (64) and runs them natively.
+
+## Ninth pass: CPU time and long sessions, from foxhound (2026-11-27 night)
+
+The frame rate on this runtime is set by one CPU thread that prepares and
+submits each frame (VIctory-RDNA's own benchmark: ~30 ms of preparing a frame
+on a 24-thread Zen 3 at 4K; foxhound: the card idle a third of the time where
+fps drops). On a 6-core 5600X that thread matters most. From
+readmet3xt-lab/foxhound 0.2.0-pre.4 (VIctory-RDNA pin moved to c0d38c3, docs
+only upstream):
+
+| Patch | What it does |
+|---|---|
+| rdna 0065 foxhound-texsweep | a texture whose host copy was let go kept its last-use stamp, so every later sweep sorted it and took its lock for nothing: sweeps grew through a session (3 ms after a minute, 14 ms after 30 in foxhound; "5 fps after 10 minutes", stuttering sound). The stamp is cleared when the copy goes |
+| rdna 0066 foxhound-dstorage-priority | streaming workers (one per processor) run below normal, so the threads a frame waits for get the cores first while a scene streams in (`VICTORY_DSTORAGE_PRIORITY=-1`; 0 as before, which the `+safe` crash retry sets; `VICTORY_DSTORAGE_WORKERS`) |
+| rdna 0067 foxhound-passes-hot | copy helpers woken at each submission's start (`VICTORY_PASSES_HOT=1` in the rdna presets, as foxhound's launcher; longest frame 525 -> 145 ms in their walk) |
+
+Not taken: `VICTORY_TEXSPK_PASS_MS` (a frame's texture passes within 8 ms:
++20% fps in foxhound, but new textures show later; VIctory-RDNA gives texture
+passes 250 ms and triples that while a backlog drains so surfaces are not
+black, which is the problem being chased here), and the prelude pool (memory,
+not time).
+
+CI: the rdna bare and patched legs now run the runtime's GPU-free timing
+tests (`Speed tests` in the job summary) so a patch that slows the CPU side
+shows before a PC run.

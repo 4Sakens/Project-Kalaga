@@ -1,4 +1,4 @@
 # The tree patches/rdna/*.patch were picked against (patches/UPSTREAM-PRS.md).
 repo = "https://github.com/XaviFortes/VIctory-RDNA"
 branch = "main"
-commit = "9cd7782be172afe9611b1e520b77d4d0aed4c71a"
+commit = "c0d38c34edcdecb7e1f11a3a83ab2856fa4d8a55"

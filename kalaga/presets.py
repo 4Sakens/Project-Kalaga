@@ -181,6 +181,10 @@ _RDNA_FAST = {
     "VICTORY_ASK_SPREAD": "1",
     "VICTORY_RESIDENCY": "1",
     "VICTORY_SYNC_FINE": "1",
+    # Kalaga rdna 0067 (foxhound PR #13): copy helpers woken at each
+    # submission's start, asleep right after (1 us). Longest frame 525 -> 145 ms
+    # in foxhound's walk; longer values spin cores, bad on 6 of them.
+    "VICTORY_PASSES_HOT": "1",
 }
 # Renderer port 1 keeps indirect executions that read the title's memory in
 # place in order (each clamped right before it runs). VIctory-RDNA's own
@@ -193,6 +197,9 @@ _RDNA_FAST.update(_RDNA_ORDER)
 _RDNA_SAFE = {
     "VICTORY_UNDER_WIDE": "0",
     "VICTORY_LAND_ECHO": "0",
+    # Kalaga rdna 0066 puts streaming workers below normal; a crash retry
+    # runs them as before.
+    "VICTORY_DSTORAGE_PRIORITY": "0",
 }
 _RDNA_COMMON = {**_RDNA_BASE, **_THIRTY_TWO_GB, **_PIPELINE_BOOK, **_FEEL}
 
