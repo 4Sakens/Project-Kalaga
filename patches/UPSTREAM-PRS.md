@@ -277,3 +277,34 @@ not time).
 CI: the rdna bare and patched legs now run the runtime's GPU-free timing
 tests (`Speed tests` in the job summary) so a patch that slows the CPU side
 shows before a PC run.
+
+## Tenth pass (2026-11-27 late)
+
+rdna 0068 **foxhound-lds-first-init**: a compute program whose LDS set-up is
+done by the group's first thread alone skipped it when that thread had left,
+and on a PC the group then read leftovers: 71 of 124 such tiles of the water's
+tiled light wrote nothing (dark slabs on water along the horizon and beside
+rocks and hulls). The first thread now always does it
+(`VICTORY_LDS_FIRST_INIT=0`: as the console). Not wave-size specific.
+
+From the evening's candidates run (41 applied cleanly; taken where they help
+this PC):
+
+| Patch | What it does here |
+|---|---|
+| 0069 marvisak-pr3383 | XMA audio: voices boxed, inactive slots skipped in the pump, per-frame scratch reused (less audio CPU time beside the frame on 6 cores) |
+| 0070 marvisak-pr2795 | XMA2 inverse MDCT 24-29% faster |
+| 0071 marvisak-pr2663 | XMA: 10-bit VLC lookup table, 64-bit bit peeks, quant-factor table |
+| 0072 marvisak-pr3629 | XMA: paired overlap samples walked directly |
+| 0073 dexnom-pr96 | tests for XMA interleaving and empty packet chains (the fix itself is in VIctory-RDNA already) |
+| 0074 marvisak-pr1437 | packed D16 image loads keep the unwritten high half |
+| 0075 dexnom-pr140 | v_writelane_b32 takes its lane from S1[5:0] in wave64 (the RX 7600 runs those programs as wave64) |
+| 0076 fxceless-pr1006 | the shader code table starts after the instructions (a device fault on RTX 5090, port of Marvisak #2143) |
+
+Not taken: foxhound's `VICTORY_LDS_LOOP_ATOMICS` (cloud tiles' sort): built
+on an LDS ordering pass VIctory-RDNA does not have; Marvisak #3631 (did not
+apply after the other XMA changes); diagnostics, Proton/Linux, docs and
+test-only PRs.
+
+A backup bundle of VIctory-RDNA at c0d38c3 with a `kalaga-prs` branch (all
+patches applied) was handed to the user, as Belobug's was.

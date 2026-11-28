@@ -1,0 +1,39 @@
+From f83cb3671667303415d0c663c6e5e18f3cc80ca6 Mon Sep 17 00:00:00 2001
+From: andrewpozdnakov7-jpg <andrewpozdnakov7-jpg@users.noreply.github.com>
+Date: Sat, 28 Nov 2026 01:39:41 +0200
+Subject: [PATCH 72/76] Formats: walk paired XMA overlap samples directly
+
+---
+ crates/victory-formats/src/xma.rs | 16 ++++++++++------
+ 1 file changed, 10 insertions(+), 6 deletions(-)
+
+diff --git a/crates/victory-formats/src/xma.rs b/crates/victory-formats/src/xma.rs
+index a9228e64..9bb5a46e 100644
+--- a/crates/victory-formats/src/xma.rs
++++ b/crates/victory-formats/src/xma.rs
+@@ -1310,12 +1310,16 @@ fn windows() -> &'static [Vec<f32>; 3] {
+ /// the previous block's tail, the second half the current block's head.
+ fn window_overlap(block: &mut [f32], window: &[f32]) {
+     let len = block.len() / 2;
+-    for k in 0..len {
+-        let (i, j) = (k, 2 * len - 1 - k);
+-        let (s0, s1) = (block[i], block[2 * len - 1 - k]);
+-        let (wi, wj) = (window[i], window[j]);
+-        block[i] = s0 * wj - s1 * wi;
+-        block[j] = s0 * wi + s1 * wj;
++    let (head, tail) = block[..2 * len].split_at_mut(len);
++    let (rising, falling) = window[..2 * len].split_at(len);
++    for ((head, tail), (&rise, &fall)) in head
++        .iter_mut()
++        .zip(tail.iter_mut().rev())
++        .zip(rising.iter().zip(falling.iter().rev()))
++    {
++        let (previous, current) = (*head, *tail);
++        *head = previous * fall - current * rise;
++        *tail = previous * rise + current * fall;
+     }
+ }
+ 
+-- 
+2.43.0
+
